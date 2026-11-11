@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* Gemini Canvas（Tailwind v3）と同じ見た目になるよう、v4で変わった既定値を v3 相当に戻す */
+@theme {
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --radius-sm: 0.125rem;
+  --blur-sm: 4px;
+  --drop-shadow-sm: 0 1px 1px rgb(0 0 0 / 0.05);
+  --drop-shadow-md: 0 4px 3px rgb(0 0 0 / 0.07), 0 2px 2px rgb(0 0 0 / 0.06);
+}
+
+@layer base {
+  *, ::after, ::before, ::backdrop, ::file-selector-button {
+    border-color: var(--color-gray-200, currentColor);
+  }
+  input::placeholder, textarea::placeholder {
+    color: var(--color-gray-400);
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  html, body {
+    margin: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* tailwindcss-animate 相当（animate-in / fade-in / zoom-in-95 / slide-in-from-top-2） */
+@keyframes mm-enter {
+  from {
+    opacity: var(--mm-enter-opacity, 1);
+    transform: translate3d(0, var(--mm-enter-y, 0), 0) scale(var(--mm-enter-scale, 1));
+  }
+}
+.animate-in { animation: mm-enter var(--tw-duration, 150ms) ease-out; }
+.fade-in { --mm-enter-opacity: 0; }
+.zoom-in-95 { --mm-enter-scale: .95; }
+.slide-in-from-top-2 { --mm-enter-y: -0.5rem; }
+
+.hide-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.safe-area-pb { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
