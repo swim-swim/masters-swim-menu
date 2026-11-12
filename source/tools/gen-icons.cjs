@@ -7,7 +7,7 @@ const map = { Settings:'Settings', List:'List', Timer:'Timer', Edit2:'Pen', X:'X
   Sparkles:'Sparkles', ChevronDown:'ChevronDown', Save:'Save', Check:'Check', Search:'Search', Filter:'Filter',
   Calendar:'Calendar', Globe:'Globe', PenTool:'PenTool', SlidersHorizontal:'SlidersHorizontal', RotateCcw:'RotateCcw',
   HelpCircle:'CircleHelp', Key:'Key', Download:'Download', Upload:'Upload', Copy:'Copy', Lock:'Lock', Unlock:'LockOpen',
-  CheckCircle2:'CircleCheck', Building2:'Building2', Trophy:'Trophy' };
+  CheckCircle2:'CircleCheck', Building2:'Building2', Trophy:'Trophy', Maximize2:'Maximize2' };
 const out = [];
 out.push("import React from 'react';");
 out.push("type P = React.SVGProps<SVGSVGElement> & { size?: number | string; strokeWidth?: number | string };");

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Settings, List, Timer, Edit2, X, Plus, Minus, Layers, Trash2, Clock, AlertCircle, Printer, Camera, Sparkles, ChevronDown, Save, Check, Search, Filter, Calendar, Globe, PenTool, SlidersHorizontal, RotateCcw, HelpCircle, Key, Download, Upload, Copy, Lock, Unlock, CheckCircle2, Building2, Trophy } from 'lucide-react';
+import { Settings, List, Timer, Edit2, X, Plus, Minus, Layers, Trash2, Clock, AlertCircle, Printer, Camera, Sparkles, ChevronDown, Save, Check, Search, Filter, Calendar, Globe, PenTool, SlidersHorizontal, RotateCcw, HelpCircle, Key, Download, Upload, Copy, Lock, Unlock, CheckCircle2, Building2, Trophy, Maximize2 } from 'lucide-react';
 
 // --- アプリの定数 ---
 const DEFAULT_CLUBS = [
@@ -13,7 +13,68 @@ const LEVEL_CATEGORIES = [
   { id: 'special', name: 'スペシャルマスターズ', desc: '大会出場・記録更新' }
 ];
 
+// --- 種目・詳細のパターン（生成ロジック設定で編集可能） ---
+// Main は目的ごとに分ける。自動生成ではこの中からランダムに1つ選ぶ。
+const PATTERN_GROUPS = [
+  { key: 'W-Up', label: 'W-Up' },
+  { key: 'Kick', label: 'Kick' },
+  { key: 'Drill', label: 'Drill' },
+  { key: 'Pull', label: 'Pull' },
+  { key: 'Main-endurance', label: 'Main 持久力' },
+  { key: 'Main-speed', label: 'Main スピード' },
+  { key: 'Main-technique', label: 'Main テクニック' },
+  { key: 'Main-recovery', label: 'Main フォーム' },
+  { key: 'Down', label: 'Down' }
+];
+const DEFAULT_SET_PATTERNS = {
+  'W-Up': [
+    { style: 'Choice', description: 'ゆったりと体をほぐす' },
+    { style: 'Fr', description: 'ストローク長く大きく' },
+    { style: 'Choice', description: '呼吸を整えながら' }
+  ],
+  'Kick': [
+    { style: 'Choice', description: '板キック / 姿勢を意識' },
+    { style: 'Fr', description: 'サイドキック / 体幹を意識' },
+    { style: 'Ba', description: '背面キック / 腰を沈めない' }
+  ],
+  'Drill': [
+    { style: 'Choice', description: 'ドリル / フォームを意識' },
+    { style: 'Fr', description: '片手クロール / キャッチを意識' },
+    { style: 'Br', description: '2キック1プル / 伸びを意識' }
+  ],
+  'Pull': [
+    { style: 'Fr', description: 'ブイ使用 / キャッチを意識' },
+    { style: 'Fr', description: 'ブイ使用 / 後半まで押し切る' },
+    { style: 'Fr', description: 'ブイ使用 / 呼吸を減らす' }
+  ],
+  'Main-endurance': [
+    { style: 'Fr', description: 'イーブンペースを保つ' },
+    { style: 'Fr', description: '後半ビルドアップ' },
+    { style: 'Choice', description: '一定のリズムで泳ぐ' }
+  ],
+  'Main-speed': [
+    { style: 'S1', description: 'Hard! 質を落とさずに' },
+    { style: 'S1', description: '前半から攻める' },
+    { style: 'Fr', description: 'スタートダッシュを意識' }
+  ],
+  'Main-technique': [
+    { style: 'IM', description: 'フォームを崩さず丁寧に' },
+    { style: 'IM', description: 'ターンを丁寧に' },
+    { style: 'Choice', description: 'ストローク数を数える' }
+  ],
+  'Main-recovery': [
+    { style: 'Choice', description: '気持ちよく泳ぐ' },
+    { style: 'Choice', description: 'ストローク長く楽に' },
+    { style: 'Fr', description: 'リラックスして泳ぐ' }
+  ],
+  'Down': [
+    { style: 'Choice', description: '心拍数を整える' },
+    { style: 'Choice', description: 'ゆったり / 体をほぐす' }
+  ]
+};
+
 const DEFAULT_LOGIC_SETTINGS = {
+  setPatterns: DEFAULT_SET_PATTERNS,
   levels: [
     { id: 'enjoy-beginner', category: 'enjoy', name: '初級', basePace25: 35, desc: 'マイペース' },
     { id: 'enjoy-intermediate', category: 'enjoy', name: '中級', basePace25: 30, desc: '定期的に泳ぐ' },
@@ -117,80 +178,208 @@ const safeStorage = (() => {
 const GEMINI_DEFAULT_MODEL = 'gemini-flash-latest';
 const GEMINI_FALLBACK_MODEL = 'gemini-flash-lite-latest';
 
-class GeminiError extends Error {
+// --- 使えるAIサービス（APIキーを登録した人だけがAIモードを使える） ---
+const AI_PROVIDERS = [
+  {
+    id: 'gemini', name: 'Google Gemini', short: 'Gemini', placeholder: 'AIzaSy...',
+    defaultModel: GEMINI_DEFAULT_MODEL, keyUrl: 'https://aistudio.google.com/apikey',
+    keyNote: 'Google AI Studio で発行できます（無料枠あり）。'
+  },
+  {
+    id: 'openai', name: 'ChatGPT（OpenAI）', short: 'ChatGPT', placeholder: 'sk-...',
+    defaultModel: 'gpt-6-luna', keyUrl: 'https://platform.openai.com/api-keys',
+    keyNote: 'OpenAIの開発者サイトで発行します（使った分だけ課金）。ChatGPTの有料プランとは別の契約です。'
+  },
+  {
+    id: 'anthropic', name: 'Claude（Anthropic）', short: 'Claude', placeholder: 'sk-ant-...',
+    defaultModel: 'claude-haiku-5-5', keyUrl: 'https://platform.claude.com/settings/keys',
+    keyNote: 'Claude Console で発行します（使った分だけ課金）。Claudeのチャットの有料プランとは別の契約です。'
+  },
+  {
+    id: 'azure', name: 'Microsoft（Azure OpenAI）', short: 'Azure', placeholder: 'Azure のキー',
+    defaultModel: '', keyUrl: 'https://ai.azure.com/',
+    keyNote: 'Microsoft Foundry（Azure）でモデルをデプロイし、「エンドポイント」「キー」「デプロイ名」を確認して入力します。'
+  }
+];
+const getAiProvider = (id) => AI_PROVIDERS.find(p => p.id === id) || AI_PROVIDERS[0];
+
+class AiError extends Error {
   constructor(message, code) {
     super(message);
     this.code = code;
   }
 }
+const GeminiError = AiError; // 旧名の互換
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const callGemini = async (payload, customApiKey = "", model = "", maxRetries = 2) => {
-  const key = (customApiKey || '').trim() || apiKey;
-  if (!key) throw new GeminiError('APIキーが設定されていません', 'NO_KEY');
+// AIの応答テキストから JSON を取り出す（```json で囲まれていたり前後に文章があっても読む）
+const parseJsonLoose = (text) => {
+  const t = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try { return JSON.parse(t); } catch {}
+  const starts = [t.indexOf('['), t.indexOf('{')].filter(i => i >= 0);
+  if (!starts.length) throw new AiError('AIの応答がJSONではありません', 'FORMAT');
+  const start = Math.min(...starts);
+  const end = Math.max(t.lastIndexOf(']'), t.lastIndexOf('}'));
+  try { return JSON.parse(t.slice(start, end + 1)); } catch { throw new AiError('AIの応答がJSONではありません', 'FORMAT'); }
+};
 
-  const models = [...new Set([(model || '').trim() || GEMINI_DEFAULT_MODEL, GEMINI_FALLBACK_MODEL])];
-  let lastError = new GeminiError('API呼び出しに失敗しました', 'UNKNOWN');
+// Azure のエンドポイント入力（https://xxx.openai.azure.com/ など）を v1 API の URL にそろえる
+const azureChatUrl = (endpoint) => {
+  let base = String(endpoint || '').trim().replace(/\/+$/, '');
+  if (!/^https:\/\//i.test(base)) return null;
+  base = base.replace(/\/openai(\/v1)?(\/chat\/completions)?$/i, '');
+  return `${base}/openai/v1/chat/completions`;
+};
 
+// HTTPの結果をエラー種別に変換
+const classifyAiHttpError = (status, bodyText) => {
+  const body = String(bodyText || '');
+  if (status === 401 || status === 403 || /API_KEY_INVALID|API key not valid|invalid.{0,10}api.?key|Incorrect API key|invalid x-api-key|authentication_error/i.test(body)) {
+    return new AiError('APIキーが無効です', 'BAD_KEY');
+  }
+  if (status === 429 || /insufficient_quota|credit balance|billing|quota/i.test(body)) {
+    return new AiError('利用上限・残高不足です', 'QUOTA');
+  }
+  if (status === 404 || /model_not_found|not_found_error|DeploymentNotFound|does not exist|is not found/i.test(body)) {
+    return new AiError('モデルが見つかりません', 'NO_MODEL');
+  }
+  if (status >= 500) return new AiError('AIサーバーが混雑しています', 'SERVER');
+  return new AiError('AIへのリクエストが受け付けられませんでした', 'BAD_REQUEST');
+};
+
+// --- Gemini（従来どおり。上限・未提供時は Flash-Lite に自動切り替え） ---
+const callGeminiApi = async (cfg, req, maxRetries) => {
+  const models = [...new Set([(cfg.model || '').trim() || GEMINI_DEFAULT_MODEL, GEMINI_FALLBACK_MODEL])];
+  const payload = {
+    contents: [{ parts: [{ text: req.user }] }],
+    systemInstruction: { parts: [{ text: req.system }] },
+    generationConfig: { responseMimeType: 'application/json', ...(req.geminiSchema ? { responseSchema: req.geminiSchema } : {}) }
+  };
+  let lastError = new AiError('API呼び出しに失敗しました', 'UNKNOWN');
   for (const m of models) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       let response;
       try {
         response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': cfg.key },
           body: JSON.stringify(payload)
         });
       } catch {
-        lastError = new GeminiError('通信エラー', 'NETWORK');
+        lastError = new AiError('通信エラー', 'NETWORK');
         if (attempt < maxRetries) { await sleep(1000 * 2 ** attempt); continue; }
         break;
       }
-
       if (response.ok) {
         const result = await response.json();
-        const text = (result.candidates?.[0]?.content?.parts || [])
-          .filter(part => !part.thought)
-          .map(part => part.text || '')
-          .join('')
-          .trim();
-        if (text) return text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-        lastError = new GeminiError('AIの応答が空でした', 'EMPTY');
+        const text = (result.candidates?.[0]?.content?.parts || []).filter(part => !part.thought).map(part => part.text || '').join('').trim();
+        if (text) return text;
+        lastError = new AiError('AIの応答が空でした', 'EMPTY');
         if (attempt < maxRetries) { await sleep(1000 * 2 ** attempt); continue; }
         break;
       }
-
-      const bodyText = await response.text().catch(() => '');
-      if (response.status === 401 || response.status === 403 || /API_KEY_INVALID|API key not valid/i.test(bodyText)) {
-        // キーが無効なら何度試しても同じなので即終了
-        throw new GeminiError('APIキーが無効です', 'BAD_KEY');
-      }
-      if (response.status === 429) {
-        lastError = new GeminiError('無料枠の上限に達しました', 'QUOTA');
-        break; // 次のモデル(Flash-Lite)へ
-      }
-      if (response.status === 400 || response.status === 404) {
-        lastError = new GeminiError('モデルが利用できません', 'NO_MODEL');
-        break; // 次のモデルへ
-      }
-      // 5xx などの一時的なエラーは間隔をあけて再試行
-      lastError = new GeminiError('AIサーバーが混雑しています', 'SERVER');
-      if (attempt < maxRetries) await sleep(1000 * 2 ** attempt);
+      const err = classifyAiHttpError(response.status, await response.text().catch(() => ''));
+      if (err.code === 'BAD_KEY') throw err;
+      lastError = err.code === 'BAD_REQUEST' ? new AiError('モデルが利用できません', 'NO_MODEL') : err;
+      if (err.code === 'SERVER' && attempt < maxRetries) { await sleep(1000 * 2 ** attempt); continue; }
+      break; // 上限・モデルなし → 次のモデル(Flash-Lite)へ
     }
   }
   throw lastError;
 };
 
-const geminiErrorToast = (error, fallbackLabel) => {
+// --- ChatGPT（OpenAI）／ Microsoft（Azure OpenAI）：Chat Completions 形式 ---
+// --- Claude（Anthropic）：Messages API ---
+const callOtherAiApi = async (cfg, req, maxRetries) => {
+  const system = `${req.system}\n\n${req.jsonHint}`;
+  let url, headers, body, pick;
+  if (cfg.provider === 'anthropic') {
+    url = 'https://api.anthropic.com/v1/messages';
+    headers = {
+      'content-type': 'application/json',
+      'x-api-key': cfg.key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    };
+    body = { model: (cfg.model || '').trim() || 'claude-haiku-5-5', max_tokens: 8000, system, messages: [{ role: 'user', content: req.user }] };
+    pick = (r) => (r.content || []).filter(c => c.type === 'text').map(c => c.text).join('').trim();
+  } else {
+    const isAzure = cfg.provider === 'azure';
+    url = isAzure ? azureChatUrl(cfg.endpoint) : 'https://api.openai.com/v1/chat/completions';
+    if (!url) throw new AiError('Azureのエンドポイントが未設定です', 'NO_CONFIG');
+    const model = (cfg.model || '').trim() || (isAzure ? '' : 'gpt-6-luna');
+    if (!model) throw new AiError('Azureのデプロイ名が未設定です', 'NO_CONFIG');
+    headers = isAzure
+      ? { 'Content-Type': 'application/json', 'api-key': cfg.key }
+      : { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.key}` };
+    body = {
+      model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: req.user }],
+      response_format: { type: 'json_object' }
+    };
+    pick = (r) => String(r.choices?.[0]?.message?.content || '').trim();
+  }
+  let lastError = new AiError('API呼び出しに失敗しました', 'UNKNOWN');
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let response;
+    try {
+      response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+    } catch {
+      // ブラウザから接続できない（ネットワーク不通、またはサービス側がブラウザからの接続を拒否）
+      lastError = new AiError('AIに接続できません', 'NETWORK');
+      if (attempt < maxRetries) { await sleep(1000 * 2 ** attempt); continue; }
+      break;
+    }
+    if (response.ok) {
+      const text = pick(await response.json());
+      if (text) return text;
+      lastError = new AiError('AIの応答が空でした', 'EMPTY');
+      if (attempt < maxRetries) { await sleep(1000 * 2 ** attempt); continue; }
+      break;
+    }
+    const err = classifyAiHttpError(response.status, await response.text().catch(() => ''));
+    lastError = err;
+    if ((err.code === 'SERVER' || response.status === 529) && attempt < maxRetries) { await sleep(1000 * 2 ** attempt); continue; }
+    break;
+  }
+  throw lastError;
+};
+
+// cfg = { provider, key, model, endpoint } / req = { system, user, geminiSchema, jsonHint }
+const callAI = async (cfg, req, maxRetries = 2) => {
+  const key = (cfg?.key || '').trim() || (cfg?.provider === 'gemini' ? apiKey : '');
+  if (!key) throw new AiError('APIキーが設定されていません', 'NO_KEY');
+  const conf = { ...cfg, key, provider: cfg?.provider || 'gemini' };
+  return conf.provider === 'gemini' ? callGeminiApi(conf, req, maxRetries) : callOtherAiApi(conf, req, maxRetries);
+};
+
+const aiErrorToast = (error, fallbackLabel) => {
   const code = error?.code;
   if (code === 'NO_KEY') return `APIキー未設定のため${fallbackLabel}`;
   if (code === 'BAD_KEY') return `APIキーが無効なため${fallbackLabel}`;
-  if (code === 'QUOTA') return `AI無料枠の上限のため${fallbackLabel}`;
+  if (code === 'QUOTA') return `AIの利用上限・残高不足のため${fallbackLabel}`;
+  if (code === 'NO_MODEL') return `モデル名が無効なため${fallbackLabel}`;
+  if (code === 'NO_CONFIG') return `AIの設定が未完了のため${fallbackLabel}`;
+  if (code === 'NETWORK') return `AIに接続できないため${fallbackLabel}`;
   return `AI通信エラーのため${fallbackLabel}`;
 };
+const geminiErrorToast = aiErrorToast; // 旧名の互換
 
-const fetchWorkoutFromGemini = async (params, logicSettings, customApiKey = "", model = "") => {
+// 接続テスト用（ごく小さな問い合わせ）
+const testAiConnection = async (cfg) => {
+  const text = await callAI(cfg, {
+    system: 'あなたは接続テスト用の応答係です。',
+    user: '{"ok": true} というJSONだけを返してください。',
+    geminiSchema: { type: 'OBJECT', properties: { ok: { type: 'BOOLEAN' } } },
+    jsonHint: '出力は {"ok": true} というJSONオブジェクトのみ。'
+  }, 0);
+  const parsed = parseJsonLoose(text);
+  if (!parsed || typeof parsed !== 'object') throw new AiError('応答の形式が不正です', 'FORMAT');
+  return true;
+};
+
+const fetchWorkoutFromAI = async (params, logicSettings, aiConfig) => {
   const baseRatio = logicSettings.baseRatios[params.purposeId] || logicSettings.baseRatios.default;
   const adj = logicSettings.periodAdjustments[params.periodId] || { WUp:0, Kick:0, Drill:0, Pull:0, Main:0, Down:0 };
   const targetLevel = logicSettings.levels.find(l => l.id === params.levelId);
@@ -203,12 +392,14 @@ const fetchWorkoutFromGemini = async (params, logicSettings, customApiKey = "", 
 以下のルールに厳密に従ってJSONを出力してください。
 1. 各パート(W-Up, Kick, Drill, Pull, Main, Down)の総距離(total)の合計が、必ず目標の総距離と一致すること。
 2. ダウン(Down)は必ず最後に入れ、最低${distConfig.minDownTotal}m確保すること。
-3. distance(1本の距離)は5の倍数にし、最大${distConfig.maxRepDist}m以下にすること。各パートの1本あたりの基準距離は W-Up:${distConfig.WUp}m、Kick:${distConfig.Kick}m、Drill:${distConfig.Drill}m、Pull:${distConfig.Pull}m、Main:${mainTargetDist}m、Down:${distConfig.Down}m を目安にすること。
-4. circleSeconds(サークルタイム)は5の倍数にすること(ダウンやリカバリーの場合は0でも可)。
+3. distance(1本の距離)は必ず 25, 50, 100, 200 のいずれか（それ以外の距離は使わない）にし、最大${maxAllowedRep(distConfig.maxRepDist || 100)}m以下にすること。各パートの1本あたりの基準距離は W-Up:${snapRepDistance(distConfig.WUp)}m、Kick:${snapRepDistance(distConfig.Kick)}m、Drill:${snapRepDistance(distConfig.Drill)}m、Pull:${snapRepDistance(distConfig.Pull)}m、Main:${snapRepDistance(mainTargetDist)}m、Down:${snapRepDistance(distConfig.Down)}m を目安にすること。
+4. circleSeconds(サークルタイム)は5の倍数にし、ダウンやフォーム向上を含むすべてのセットに必ず設定すること(0にしない)。
 5. styleは 'Choice', 'Fr', 'Ba', 'Br', 'Fly', 'IM', 'S1' のいずれか。
 6. 日本語でdescriptionを記述すること。
 7. 参考：各パートの距離割合の目安は、W-Up:${baseRatio.WUp+adj.WUp}%、Kick:${baseRatio.Kick+adj.Kick}%、Drill:${baseRatio.Drill+adj.Drill}%、Pull:${baseRatio.Pull+adj.Pull}%、Main:${baseRatio.Main+adj.Main}% とし、Downは最低${distConfig.minDownTotal}mを確保して残り距離を埋めること。
-8. 参考：対象レベルの25mあたりの基準ペースは ${targetLevel ? targetLevel.basePace25 : 30}秒 です。これをもとにサークルを適宜設定してください。`;
+8. 参考：対象レベルの25mあたりの基準ペースは ${targetLevel ? targetLevel.basePace25 : 30}秒 です。これをもとにサークルを適宜設定してください。
+9. 各セットの style と description は、次の登録パターン（種目 / 詳細）から選ぶことを優先すること。
+${['W-Up', 'Kick', 'Drill', 'Pull', `Main-${params.purposeId}`, 'Down'].map(k => `- ${k.startsWith('Main') ? 'Main' : k}: ` + getSetPatterns(logicSettings, k).map(pt => `${pt.style} / ${pt.description}`).join('、')).join('\n')}`;
 
   const userQuery = `
 条件:
@@ -221,53 +412,54 @@ const fetchWorkoutFromGemini = async (params, logicSettings, customApiKey = "", 
 
 この条件に最適なメニューをJSONで生成してください。`;
 
-  const payload = {
-    contents: [{ parts: [{ text: userQuery }] }],
-    systemInstruction: { parts: [{ text: systemInstruction }] },
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "ARRAY",
-        items: {
-          type: "OBJECT",
-          properties: {
-            name: { type: "STRING" },
-            type: { type: "STRING" },
-            partRestSeconds: { type: "INTEGER" },
-            total: { type: "INTEGER" },
-            sets: {
-              type: "ARRAY",
-              items: {
-                type: "OBJECT",
-                properties: {
-                  distance: { type: "INTEGER" },
-                  reps: { type: "INTEGER" },
-                  setsCount: { type: "INTEGER" },
-                  restSeconds: { type: "INTEGER" },
-                  style: { type: "STRING" },
-                  circleSeconds: { type: "INTEGER" },
-                  description: { type: "STRING" }
-                },
-                required: ["distance", "reps", "setsCount", "restSeconds", "style", "circleSeconds", "description"]
-              }
-            }
-          },
-          required: ["name", "type", "partRestSeconds", "total", "sets"]
+  const geminiSchema = {
+    type: "ARRAY",
+    items: {
+      type: "OBJECT",
+      properties: {
+        name: { type: "STRING" },
+        type: { type: "STRING" },
+        partRestSeconds: { type: "INTEGER" },
+        total: { type: "INTEGER" },
+        sets: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              distance: { type: "INTEGER" },
+              reps: { type: "INTEGER" },
+              setsCount: { type: "INTEGER" },
+              restSeconds: { type: "INTEGER" },
+              style: { type: "STRING" },
+              circleSeconds: { type: "INTEGER" },
+              description: { type: "STRING" }
+            },
+            required: ["distance", "reps", "setsCount", "restSeconds", "style", "circleSeconds", "description"]
+          }
         }
-      }
+      },
+      required: ["name", "type", "partRestSeconds", "total", "sets"]
     }
   };
+  // Gemini以外のAI向け：出力形式を文章で指定
+  const jsonHint = `出力は次の形式のJSONオブジェクトのみとし、説明文やコードブロックは付けないこと。
+{"parts":[{"name":"W-Up","type":"W-Up","partRestSeconds":60,"total":300,"sets":[{"distance":50,"reps":6,"setsCount":1,"restSeconds":0,"style":"Choice","circleSeconds":60,"description":"ゆったりと体をほぐす"}]}]}
+type は W-Up, Kick, Drill, Pull, Main, Down のいずれか。数値はすべて整数。`;
 
-  const text = await callGemini(payload, customApiKey, model);
-  const parsed = JSON.parse(text);
+  const text = await callAI(aiConfig, { system: systemInstruction, user: userQuery, geminiSchema, jsonHint });
+  const obj = parseJsonLoose(text);
+  const parsed = Array.isArray(obj) ? obj : (obj?.parts || obj?.menu || obj?.workout);
   if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some(part => !Array.isArray(part?.sets))) {
-    throw new GeminiError('AIの応答形式が不正です', 'FORMAT');
+    throw new AiError('AIの応答形式が不正です', 'FORMAT');
   }
   const stamp = Date.now();
   return parsed.map((part, pIdx) => {
     const sets = part.sets.map((set, sIdx) => {
-      const distance = Math.max(5, Number(set.distance) || 25);
-      const circleSeconds = Math.max(0, Number(set.circleSeconds) || 0);
+      const distance = snapRepDistance(set.distance); // 25/50/100/200 以外が返ってきても丸める
+      // AIがサークルを省いた場合は、レベルの基準ペースからゆったりめに補う
+      const circleSeconds = Number(set.circleSeconds) > 0
+        ? Math.round(Number(set.circleSeconds) / 5) * 5
+        : Math.max(20, calculateCircle(distance, params.levelId, 1.3, logicSettings));
       return {
         ...set,
         distance,
@@ -293,7 +485,7 @@ const fetchWorkoutFromGemini = async (params, logicSettings, customApiKey = "", 
   });
 };
 
-const translateWithGemini = async (texts, targetLang, customApiKey = "", model = "") => {
+const translateWithAI = async (texts, targetLang, aiConfig) => {
   if (!texts || texts.length === 0) return {};
 
   const langName = targetLang === 'en' ? 'English' : 'Chinese (Traditional/Simplified)';
@@ -302,22 +494,16 @@ const translateWithGemini = async (texts, targetLang, customApiKey = "", model =
 水泳特有の用語（例：キャッチ、プル、サークル、イーブンペース、セット、レスト、ハードなど）は、その言語での一般的な水泳用語として適切に翻訳してください。
 元の配列と同じ要素数・同じ順番の文字列配列を必ずJSON形式で返してください。`;
 
-  const payload = {
-    contents: [{ parts: [{ text: JSON.stringify(texts) }] }],
-    systemInstruction: { parts: [{ text: systemInstruction }] },
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: "ARRAY",
-        items: { type: "STRING" }
-      }
-    }
-  };
-
-  const text = await callGemini(payload, customApiKey, model, 1);
-  const translatedArray = JSON.parse(text);
+  const text = await callAI(aiConfig, {
+    system: systemInstruction,
+    user: JSON.stringify(texts),
+    geminiSchema: { type: 'ARRAY', items: { type: 'STRING' } },
+    jsonHint: '出力は {"translations": ["訳1", "訳2", ...]} という形式のJSONオブジェクトのみ（元の配列と同じ要素数・同じ順番）。'
+  }, 1);
+  const obj = parseJsonLoose(text);
+  const translatedArray = Array.isArray(obj) ? obj : obj?.translations;
   if (!Array.isArray(translatedArray) || translatedArray.length !== texts.length) {
-    throw new GeminiError('翻訳結果の形式が不正です', 'FORMAT');
+    throw new AiError('翻訳結果の形式が不正です', 'FORMAT');
   }
   const translationMap = {};
   texts.forEach((original, idx) => {
@@ -345,6 +531,23 @@ const TRANSLATIONS = {
       'Hard! 質を落とさずに': 'Hard! 質を落とさずに',
       'フォームを崩さず丁寧に': 'フォームを崩さず丁寧に',
       '気持ちよく泳ぐ': '気持ちよく泳ぐ',
+      'ストローク長く大きく': 'ストローク長く大きく',
+      '呼吸を整えながら': '呼吸を整えながら',
+      'サイドキック / 体幹を意識': 'サイドキック / 体幹を意識',
+      '背面キック / 腰を沈めない': '背面キック / 腰を沈めない',
+      '片手クロール / キャッチを意識': '片手クロール / キャッチを意識',
+      '2キック1プル / 伸びを意識': '2キック1プル / 伸びを意識',
+      'ブイ使用 / 後半まで押し切る': 'ブイ使用 / 後半まで押し切る',
+      'ブイ使用 / 呼吸を減らす': 'ブイ使用 / 呼吸を減らす',
+      '後半ビルドアップ': '後半ビルドアップ',
+      '一定のリズムで泳ぐ': '一定のリズムで泳ぐ',
+      '前半から攻める': '前半から攻める',
+      'スタートダッシュを意識': 'スタートダッシュを意識',
+      'ターンを丁寧に': 'ターンを丁寧に',
+      'ストローク数を数える': 'ストローク数を数える',
+      'ストローク長く楽に': 'ストローク長く楽に',
+      'リラックスして泳ぐ': 'リラックスして泳ぐ',
+      'ゆったり / 体をほぐす': 'ゆったり / 体をほぐす',
       '追加メニュー': '追加メニュー'
     }
   },
@@ -365,6 +568,23 @@ const TRANSLATIONS = {
       'Hard! 質を落とさずに': 'Hard! Maintain quality',
       'フォームを崩さず丁寧に': 'Carefully, keep form',
       '気持ちよく泳ぐ': 'Swim comfortably',
+      'ストローク長く大きく': 'Long, big strokes',
+      '呼吸を整えながら': 'Steady your breathing',
+      'サイドキック / 体幹を意識': 'Side kick / Engage your core',
+      '背面キック / 腰を沈めない': 'Back kick / Keep hips up',
+      '片手クロール / キャッチを意識': 'One-arm free / Focus on catch',
+      '2キック1プル / 伸びを意識': '2 kicks 1 pull / Focus on glide',
+      'ブイ使用 / 後半まで押し切る': 'Pull buoy / Push through to the finish',
+      'ブイ使用 / 呼吸を減らす': 'Pull buoy / Fewer breaths',
+      '後半ビルドアップ': 'Build up in the second half',
+      '一定のリズムで泳ぐ': 'Swim with a steady rhythm',
+      '前半から攻める': 'Go out fast',
+      'スタートダッシュを意識': 'Focus on a fast start',
+      'ターンを丁寧に': 'Clean turns',
+      'ストローク数を数える': 'Count your strokes',
+      'ストローク長く楽に': 'Long, easy strokes',
+      'リラックスして泳ぐ': 'Swim relaxed',
+      'ゆったり / 体をほぐす': 'Easy / Loosen up',
       '追加メニュー': 'Additional menu'
     }
   },
@@ -385,6 +605,23 @@ const TRANSLATIONS = {
       'Hard! 質を落とさずに': '全力！保持質量',
       'フォームを崩さず丁寧に': '保持姿勢，仔細游',
       '気持ちよく泳ぐ': '輕鬆游',
+      'ストローク長く大きく': '划手要長而大',
+      '呼吸を整えながら': '調整呼吸',
+      'サイドキック / 体幹を意識': '側身打水 / 注意核心',
+      '背面キック / 腰を沈めない': '仰式打水 / 臀部不下沉',
+      '片手クロール / キャッチを意識': '單手自由式 / 注意抓水',
+      '2キック1プル / 伸びを意識': '兩踢一划 / 注意伸展滑行',
+      'ブイ使用 / 後半まで押し切る': '夾浮球 / 推水到底',
+      'ブイ使用 / 呼吸を減らす': '夾浮球 / 減少換氣',
+      '後半ビルドアップ': '後半漸速',
+      '一定のリズムで泳ぐ': '保持穩定節奏',
+      '前半から攻める': '前半段積極進攻',
+      'スタートダッシュを意識': '注意起步衝刺',
+      'ターンを丁寧に': '仔細轉身',
+      'ストローク数を数える': '計算划手次數',
+      'ストローク長く楽に': '划手長而輕鬆',
+      'リラックスして泳ぐ': '放鬆游',
+      'ゆったり / 体をほぐす': '輕鬆 / 放鬆身體',
       '追加メニュー': '追加菜單'
     }
   }
@@ -558,7 +795,8 @@ const getEstimatedDistance = (startStr, endStr, levelId, purposeId, periodId, lo
   if (periodId === 'taper') periodWeight = 0.6; 
   
   const estimated = base60MinDist * (diffMinutes / 60) * periodWeight;
-  return roundTo10(estimated);
+  // 目安はキリのよい100m単位で示す（例：1510m → 1500m）
+  return Math.max(100, Math.round(estimated / 100) * 100);
 };
 
 const getPartColors = (name) => {
@@ -591,6 +829,7 @@ const createDefaultClubProfile = (overrides = {}) => ({
   printFont: 'handwriting',
   printLang: 'ja',
   competitions: [],
+  classes: [],
   showCompetitionOnPrint: true,
   ...overrides
 });
@@ -661,83 +900,103 @@ const PRINT_LANGS = [
   { id: 'zh', name: '中文' }
 ];
 
+// パートの種類と目的から、パターンのグループ名を決める
+const patternKeyFor = (partType, purposeId) => {
+  if (partType === 'Main' || !PATTERN_GROUPS.some(g => g.key === partType)) return `Main-${purposeId || 'endurance'}`;
+  return partType;
+};
+const getSetPatterns = (logicSettings, key) => {
+  const list = logicSettings?.setPatterns?.[key];
+  const valid = Array.isArray(list) ? list.filter(p => p && (String(p.description || '').trim() || p.style)) : null;
+  return valid && valid.length ? valid : (DEFAULT_SET_PATTERNS[key] || []);
+};
+const pickPattern = (logicSettings, key) => {
+  const list = getSetPatterns(logicSettings, key);
+  return list.length ? list[Math.floor(Math.random() * list.length)] : null;
+};
+
+// --- 1本あたりの距離は 25 / 50 / 100 / 200m の4種類だけを使う ---
+const REP_DISTANCES = [25, 50, 100, 200];
+const roundTo25 = (num) => Math.max(0, Math.round((Number(num) || 0) / 25) * 25);
+// 設定値などを、使える距離のうち最も近いもの（同じ差なら短い方）にそろえる
+const snapRepDistance = (d) => {
+  const v = Number(d) || 25;
+  return REP_DISTANCES.reduce((best, x) => (Math.abs(x - v) < Math.abs(best - v) ? x : best), REP_DISTANCES[0]);
+};
+// 上限以下で使える最大の距離
+const maxAllowedRep = (limit) => {
+  const ok = REP_DISTANCES.filter(x => x <= (Number(limit) || 100));
+  return ok.length ? ok[ok.length - 1] : 25;
+};
+// 端数の距離（25の倍数）を、使える距離だけで「距離×本数」に分ける。maxDist を超える1本は使わない
+const splitRemainder = (remainder, maxDist) => {
+  const out = [];
+  let rest = remainder;
+  while (rest >= 25) {
+    const candidates = REP_DISTANCES.filter(x => x <= maxDist && x <= rest).reverse();
+    // できれば2本以上で割り切れる距離、なければ1本でも割り切れる距離、なければ入る最大の距離
+    const d = candidates.find(x => rest % x === 0 && rest / x >= 2)
+      || candidates.find(x => rest % x === 0)
+      || candidates[0] || 25;
+    const reps = rest % d === 0 ? rest / d : Math.floor(rest / d);
+    out.push({ distance: d, reps });
+    rest -= d * reps;
+  }
+  return out;
+};
+
 const generateSetsForPart = (partType, targetDist, levelId, purposeId, periodId, logicSettings) => {
-  if (targetDist <= 0) return [];
-  
+  const total = roundTo25(targetDist);
+  if (total <= 0) return [];
+
   const isSpecial = levelId.includes('special');
   const catKey = isSpecial ? 'special' : 'enjoy';
   const distConfig = logicSettings.menuDistances?.[catKey] || DEFAULT_LOGIC_SETTINGS.menuDistances[catKey];
   const partKey = partType === 'W-Up' ? 'WUp' : partType;
-  const maxRepDist = Math.max(25, Number(distConfig.maxRepDist) || 100);
+  const maxRepDist = maxAllowedRep(distConfig.maxRepDist || 100);
 
-  let preferredDist = Number(distConfig[partKey]) || (isSpecial ? 50 : 25);
-  if (isSpecial) {
-      if (partType === 'Down' && targetDist < preferredDist * 2) preferredDist = Math.min(preferredDist, 25);
-  } else {
-      if (levelId === 'enjoy-beginner' && targetDist < 100) {
-          preferredDist = Math.min(preferredDist, 10);
-      }
+  let preferredDist = snapRepDistance(distConfig[partKey] || (isSpecial ? 50 : 25));
+  if (isSpecial && partType === 'Down' && total < preferredDist * 2) preferredDist = 25;
+  if (purposeId === 'endurance' && partType === 'Main' && total >= snapRepDistance(distConfig.MainEndurance || 50) * 2) {
+    preferredDist = snapRepDistance(distConfig.MainEndurance || (isSpecial ? 100 : 50));
   }
+  preferredDist = Math.min(preferredDist, maxRepDist);
 
-  if (purposeId === 'endurance' && partType === 'Main' && targetDist >= (Number(distConfig.MainEndurance) || 50) * 2) {
-      preferredDist = Number(distConfig.MainEndurance) || (isSpecial ? 100 : 50);
+  // 2本以上取れるまで1本の距離を短くする（25mでも2本取れない＝25mのみ なら1本）
+  while (preferredDist > 25 && Math.floor(total / preferredDist) < 2) {
+    preferredDist = REP_DISTANCES[REP_DISTANCES.indexOf(preferredDist) - 1];
   }
+  let reps = Math.floor(total / preferredDist);
+  if (reps % 2 !== 0 && reps > 2) reps -= 1;
+  if (reps < 1) reps = 1;
 
-  if (preferredDist < 5) preferredDist = 5;
-  if (preferredDist > maxRepDist) preferredDist = maxRepDist;
-
-  preferredDist = Math.max(5, Math.floor(preferredDist / 5) * 5);
-
-  let reps = Math.floor(targetDist / preferredDist);
-
-  if (reps % 2 !== 0) {
-      reps -= 1;
-  }
-  
-  if (reps < 2) {
-      reps = 2; 
-      preferredDist = Math.floor((targetDist / 2) / 5) * 5;
-      if (preferredDist < 5) {
-          preferredDist = 5;
-          if (targetDist < 10) reps = 1;
-      }
-  }
-
+  // 本数が多すぎる場合は、1本の距離を倍（使える距離の範囲で）にするか、セットに分ける
   let setsCount = 1;
   let restSeconds = 0;
-
   let loopCount = 0;
   while (reps >= 12 && loopCount < 5) {
-      loopCount++;
-      if (reps % 2 === 0 && setsCount * 2 <= 8) {
-          setsCount *= 2; 
-          reps /= 2;
-          if (reps % 2 !== 0) {
-              if (reps > 2) reps -= 1;
-              else reps += 1;
-          }
-          if (restSeconds === 0) restSeconds = 30;
-      } else {
-          if (preferredDist * 2 <= maxRepDist) {
-              preferredDist *= 2;
-              reps = Math.floor(reps / 2);
-              if (reps % 2 !== 0) {
-                  if (reps > 2) reps -= 1;
-                  else reps += 1;
-              }
-          } else {
-              setsCount *= 2;
-              reps = Math.floor(reps / 2);
-              if (reps % 2 !== 0) {
-                  if (reps > 2) reps -= 1;
-                  else reps += 1;
-              }
-              if (restSeconds === 0) restSeconds = 30;
-          }
-      }
+    loopCount++;
+    const doubled = preferredDist * 2;
+    if (reps % 2 === 0 && setsCount * 2 <= 8) {
+      setsCount *= 2;
+      reps /= 2;
+      if (reps % 2 !== 0) reps = reps > 2 ? reps - 1 : reps + 1;
+      if (restSeconds === 0) restSeconds = 30;
+    } else if (REP_DISTANCES.includes(doubled) && doubled <= maxRepDist) {
+      preferredDist = doubled;
+      reps = Math.floor(reps / 2);
+      if (reps % 2 !== 0) reps = reps > 2 ? reps - 1 : reps + 1;
+    } else {
+      setsCount *= 2;
+      reps = Math.floor(reps / 2);
+      if (reps % 2 !== 0) reps = reps > 2 ? reps - 1 : reps + 1;
+      if (restSeconds === 0) restSeconds = 30;
+    }
   }
+  // 調整で目標距離を超えた場合は本数を戻す
+  while (preferredDist * reps * setsCount > total && reps > 1) reps -= 1;
 
-  let distPerRep = preferredDist;
+  const distPerRep = preferredDist;
 
   let intensity = 1.0;
   let desc = '';
@@ -783,28 +1042,45 @@ const generateSetsForPart = (partType, targetDist, levelId, purposeId, periodId,
     intensity *= periodMultiplier;
   }
 
-  let circleSeconds = (partType === 'Down' || purposeId === 'recovery') ? 0 : calculateCircle(distPerRep, levelId, intensity, logicSettings);
-  
-  if (circleSeconds > 0) {
-      if (circleSeconds < 20) {
-          circleSeconds = 20;
-      }
-      if (partType === 'W-Up' && circleSeconds < 50) {
-          circleSeconds = 50;
-      }
+  // 種目・詳細は登録パターンからランダムに選ぶ
+  const picked = pickPattern(logicSettings, patternKeyFor(partType, purposeId));
+  if (picked) {
+    style = STYLES.includes(picked.style) ? picked.style : style;
+    desc = picked.description ?? desc;
   }
 
-  return [{
-    id: `set-${Date.now()}-${Math.random()}`,
-    distance: distPerRep,
-    reps: reps,
-    setsCount: setsCount,
-    restSeconds: restSeconds,
-    style: style,
-    circle: circleSeconds > 0 ? formatTime(circleSeconds) : null,
-    circleSeconds: circleSeconds,
-    description: desc
-  }];
+  // すべてのセットにサークルを付ける（フォーム向上・Down もゆったりしたペースで計算）
+  const circleFor = (dist) => {
+    const pace = purposeId === 'recovery' ? Math.max(intensity, 1.3) : intensity;
+    let sec = calculateCircle(dist, levelId, pace, logicSettings);
+    if (sec > 0) {
+      if (sec < 20) sec = 20;
+      if (partType === 'W-Up' && sec < 50) sec = 50;
+    }
+    return sec;
+  };
+  const makeSet = (distance, r, sc, rest) => {
+    const circleSeconds = circleFor(distance);
+    return {
+      id: `set-${Date.now()}-${Math.random()}`,
+      distance,
+      reps: r,
+      setsCount: sc,
+      restSeconds: rest,
+      style,
+      circle: circleSeconds > 0 ? formatTime(circleSeconds) : null,
+      circleSeconds,
+      description: desc
+    };
+  };
+
+  const sets = [makeSet(distPerRep, reps, setsCount, restSeconds)];
+  // 目標距離との差（端数）は、使える距離だけの追加セットで埋める
+  const remainder = total - distPerRep * reps * setsCount;
+  for (const extra of splitRemainder(remainder, distPerRep)) {
+    sets.push(makeSet(extra.distance, extra.reps, 1, 0));
+  }
+  return sets;
 };
 
 const generateWorkout = (levelId, purposeId, periodId, totalDistance, logicSettings) => {
@@ -815,8 +1091,8 @@ const generateWorkout = (levelId, purposeId, periodId, totalDistance, logicSetti
   const isSpecial = levelId.includes('special');
   const catKey = isSpecial ? 'special' : 'enjoy';
   const distConfig = logicSettings.menuDistances?.[catKey] || DEFAULT_LOGIC_SETTINGS.menuDistances[catKey];
-  const minDownTotal = Math.max(25, Number(distConfig.minDownTotal) || 50);
-  const downUnitDist = Math.max(5, Math.floor((Number(distConfig.Down) || (isSpecial ? 50 : 25)) / 5) * 5);
+  const minDownTotal = Math.max(25, roundTo25(distConfig.minDownTotal) || 50);
+  const downUnitDist = Math.min(snapRepDistance(distConfig.Down || (isSpecial ? 50 : 25)), maxAllowedRep(distConfig.maxRepDist || 100));
 
   const baseRatio = logicSettings.baseRatios[purposeId] || logicSettings.baseRatios.default;
   const adj = logicSettings.periodAdjustments[periodId] || { WUp:0, Kick:0, Drill:0, Pull:0, Main:0, Down:0 };
@@ -829,59 +1105,44 @@ const generateWorkout = (levelId, purposeId, periodId, totalDistance, logicSetti
 
   const addSet = (partName, distRatio) => {
     if (partName === 'Down') {
-      let targetDist = remainingDist;
-      if (targetDist < minDownTotal) targetDist = minDownTotal; 
-      
-      let sets = [];
+      // 残り距離（最低距離は確保）を、使える距離だけで構成する
+      const targetDist = Math.max(roundTo25(remainingDist), roundTo25(minDownTotal), 25);
+      const sets = [];
       let currentTarget = targetDist;
-      
-      while (currentTarget > 0) {
-          let dist = downUnitDist;
-          let reps = 2;
-          
-          if (currentTarget >= downUnitDist * 2) {
-              dist = downUnitDist;
-              reps = Math.floor(currentTarget / (downUnitDist * 2)) * 2;
-          } else if (currentTarget >= 50 && downUnitDist > 25) {
-              dist = 25;
-              reps = Math.floor(currentTarget / 50) * 2;
-          } else {
-              dist = Math.floor(currentTarget / 2 / 5) * 5;
-              if (dist < 5) dist = 5;
-              reps = 2;
-              
-              if (dist * reps !== currentTarget) {
-                  dist = currentTarget;
-                  reps = 1;
-              }
-          }
-          
-          sets.push({
-              id: `set-${Date.now()}-${Math.random()}`,
-              distance: dist, 
-              reps: reps, 
-              setsCount: 1, restSeconds: 0, style: 'Choice', circle: null, circleSeconds: 0, description: '心拍数を整える'
-          });
-          
-          currentTarget -= (dist * reps);
+      if (currentTarget >= downUnitDist * 2) {
+        const reps = Math.floor(currentTarget / (downUnitDist * 2)) * 2;
+        sets.push({ distance: downUnitDist, reps });
+        currentTarget -= downUnitDist * reps;
       }
+      for (const extra of splitRemainder(currentTarget, downUnitDist)) sets.push(extra);
+      const downPattern = pickPattern(logicSettings, 'Down') || { style: 'Choice', description: '心拍数を整える' };
+      const downSets = sets.map(st => {
+        const circleSeconds = Math.max(20, calculateCircle(st.distance, levelId, 1.3, logicSettings));
+        return {
+          id: `set-${Date.now()}-${Math.random()}`,
+          distance: st.distance,
+          reps: st.reps,
+          setsCount: 1, restSeconds: 0, style: STYLES.includes(downPattern.style) ? downPattern.style : 'Choice',
+          circle: formatTime(circleSeconds), circleSeconds, description: downPattern.description || ''
+        };
+      });
 
-      const actualDist = sets.reduce((sum, s) => sum + (s.distance * s.reps * s.setsCount), 0);
+      const actualDist = downSets.reduce((sum, s) => sum + (s.distance * s.reps * s.setsCount), 0);
       workout.push({
         id: `part-${idCounter++}`,
         name: partName,
         type: partName,
         partRestSeconds: 0,
         total: actualDist,
-        sets: sets
+        sets: downSets
       });
       remainingDist -= actualDist;
 
     } else {
-      let maxAllowed = remainingDist - minDownTotal; 
+      let maxAllowed = Math.floor((remainingDist - minDownTotal) / 25) * 25;
       if (maxAllowed < 0) maxAllowed = 0;
       
-      let targetDist = Math.round((totalDistance * distRatio) / 10) * 10;
+      let targetDist = Math.round((totalDistance * distRatio) / 50) * 50;
       if (targetDist > maxAllowed) targetDist = maxAllowed;
       if (targetDist <= 0) return;
 
@@ -921,6 +1182,193 @@ const generateWorkout = (levelId, purposeId, periodId, totalDistance, logicSetti
   addSet('Down', 1.0);
 
   return workout;
+};
+
+// 「1'05"」「1:05」「65」「45"」などの入力を秒に変換（不正なら null）
+const parseTimeInput = (text) => {
+  const t = String(text || '').trim().replace(/[’′‘`]/g, "'").replace(/[”″“]/g, '"').replace(/：/g, ':');
+  if (t === '' || t === '-') return 0;
+  let m = t.match(/^(\d+)\s*[:']\s*(\d{1,2})\s*"?$/);
+  if (m) return Number(m[1]) * 60 + Math.min(59, Number(m[2]));
+  m = t.match(/^(\d+)\s*["秒]?$/);
+  if (m) return Number(m[1]);
+  return null;
+};
+
+// タップするとそのまま編集できる数字（確定は フォーカスが外れたとき／Enter）
+const InlineNumber = ({ value, onCommit, min = 1, className = '', label }) => {
+  const [draft, setDraft] = useState(null);
+  const shown = draft ?? String(value ?? '');
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      aria-label={label}
+      value={shown}
+      onFocus={() => setDraft(String(value ?? ''))}
+      onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ''))}
+      onBlur={() => {
+        const n = parseInt(draft, 10);
+        if (!isNaN(n) && n >= min && n !== value) onCommit(n);
+        setDraft(null);
+      }}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      style={{ width: `${Math.max(shown.length, 1) + 0.8}ch` }}
+      className={`bg-transparent outline-none text-center rounded-md hover:bg-white/80 focus:bg-white focus:ring-2 focus:ring-blue-300 cursor-text ${className}`}
+    />
+  );
+};
+
+// タップするとそのまま編集できる時間（サークルなど）
+const InlineTime = ({ seconds, onCommit, className = '', label }) => {
+  const [draft, setDraft] = useState(null);
+  const shown = draft ?? (seconds > 0 ? formatTime(seconds) : '-');
+  return (
+    <input
+      type="text"
+      aria-label={label}
+      value={shown}
+      onFocus={() => setDraft(seconds > 0 ? formatTime(seconds) : '')}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        const sec = parseTimeInput(draft);
+        if (sec !== null && sec !== seconds) onCommit(sec);
+        setDraft(null);
+      }}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      style={{ width: `${Math.max(shown.length, 2) + 1}ch` }}
+      className={`bg-transparent outline-none text-right rounded-md hover:bg-white/80 focus:bg-white focus:ring-2 focus:ring-blue-300 cursor-text ${className}`}
+    />
+  );
+};
+
+// アイコンに触れる（PCはカーソルを合わせる）と名前を吹き出しで表示する。
+// title 属性を data-tip に移して使う（ブラウザ標準の小さなツールチップと二重にならないように）。
+const IconTooltips = () => {
+  const [tip, setTip] = useState(null);
+  useEffect(() => {
+    let showTimer = null;
+    let hideTimer = null;
+    let current = null;
+    let lastTouch = 0; // タッチ直後にブラウザが出す疑似マウスイベントは無視する
+    const labelOf = (el) => {
+      const t = el.getAttribute('title');
+      if (t) {
+        el.setAttribute('data-tip', t);
+        if (!el.getAttribute('aria-label') && !el.textContent.trim()) el.setAttribute('aria-label', t);
+      }
+      if (el.hasAttribute('title')) el.removeAttribute('title');
+      return el.getAttribute('data-tip') || '';
+    };
+    const find = (target) => (target && target.closest) ? target.closest('[title],[data-tip]') : null;
+    const show = (el) => {
+      const text = labelOf(el);
+      if (!text || !document.body.contains(el)) return;
+      const r = el.getBoundingClientRect();
+      const below = r.top < 64;
+      const half = Math.min(140, text.length * 6 + 12);
+      const x = Math.min(window.innerWidth - half - 6, Math.max(half + 6, r.left + r.width / 2));
+      setTip({ text, x, y: below ? r.bottom + 6 : r.top - 6, below });
+    };
+    const onOver = (e) => {
+      if (e.pointerType === 'touch' || Date.now() - lastTouch < 1000) return;
+      const el = find(e.target);
+      if (!el || el === current) return;
+      current = el;
+      labelOf(el);
+      clearTimeout(showTimer);
+      showTimer = setTimeout(() => show(el), 300);
+    };
+    const onOut = (e) => {
+      if (e.pointerType === 'touch' || Date.now() - lastTouch < 1000) return;
+      const el = find(e.target);
+      if (el && e.relatedTarget && el.contains(e.relatedTarget)) return;
+      current = null;
+      clearTimeout(showTimer);
+      setTip(null);
+    };
+    const onTouchStart = (e) => {
+      lastTouch = Date.now();
+      clearTimeout(hideTimer);
+      const el = find(e.target);
+      if (!el) { setTip(null); return; }
+      show(el);
+    };
+    const onTouchEnd = () => {
+      lastTouch = Date.now();
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(() => setTip(null), 1500);
+    };
+    const hideNow = () => { clearTimeout(showTimer); setTip(null); };
+    document.addEventListener('pointerover', onOver);
+    document.addEventListener('pointerout', onOut);
+    document.addEventListener('touchstart', onTouchStart, { passive: true });
+    document.addEventListener('touchend', onTouchEnd, { passive: true });
+    window.addEventListener('scroll', hideNow, true);
+    window.addEventListener('beforeprint', hideNow);
+    return () => {
+      document.removeEventListener('pointerover', onOver);
+      document.removeEventListener('pointerout', onOut);
+      document.removeEventListener('touchstart', onTouchStart);
+      document.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('scroll', hideNow, true);
+      window.removeEventListener('beforeprint', hideNow);
+      clearTimeout(showTimer);
+      clearTimeout(hideTimer);
+    };
+  }, []);
+  if (!tip) return null;
+  return (
+    <div
+      role="tooltip"
+      className="fixed z-[400] pointer-events-none print:hidden px-2 py-1 rounded-lg bg-slate-800/90 text-white text-[11px] font-bold shadow-lg whitespace-nowrap animate-in fade-in duration-150"
+      style={{ left: tip.x, top: tip.y, transform: `translate(-50%, ${tip.below ? '0' : '-100%'})` }}
+    >
+      {tip.text}
+    </div>
+  );
+};
+
+const sumSetsDistance = (sets) => sets.reduce((sum, st) => sum + (st.distance * st.reps * st.setsCount), 0);
+
+// 再生成のとき、ロック中の練習項目はそのまま残し、残りの距離だけ新しく作る
+// regenPart(partType, distance) は新しいセットの配列を返す関数
+const mergeLockedSets = (oldData, newData, regenPart) => {
+  if (!Array.isArray(oldData) || !oldData.some(p => p.sets?.some(st => st.locked))) return newData;
+  const taken = new Array(newData.length).fill(false);
+  const replacements = new Map();
+  const orphans = [];
+  oldData.forEach((oldPart, oldIdx) => {
+    const locked = oldPart.sets.filter(st => st.locked);
+    if (!locked.length) return;
+    const key = oldPart.type || oldPart.name;
+    const ni = newData.findIndex((p, i) => !taken[i] && (p.type || p.name) === key);
+    if (ni === -1) {
+      orphans.push({ oldIdx, part: { ...oldPart, sets: locked, total: sumSetsDistance(locked) } });
+      return;
+    }
+    taken[ni] = true;
+    const target = newData[ni];
+    const remaining = Math.max(0, roundTo25(Number(target.total) - sumSetsDistance(locked)));
+    const queue = remaining > 0 ? [...regenPart(target.type || key, remaining)] : [];
+    // ロック項目は元の並び位置のまま。空いた位置に新しい項目を入れる
+    const sets = [];
+    oldPart.sets.forEach(st => {
+      if (st.locked) sets.push(st);
+      else if (queue.length) sets.push(queue.shift());
+    });
+    sets.push(...queue);
+    replacements.set(ni, {
+      ...target,
+      name: oldPart.name,
+      partRestSeconds: oldPart.partRestSeconds ?? target.partRestSeconds,
+      sets,
+      total: sumSetsDistance(sets)
+    });
+  });
+  const result = newData.map((p, i) => replacements.get(i) || p);
+  orphans.forEach(o => result.splice(Math.min(o.oldIdx, result.length), 0, o.part));
+  return result;
 };
 
 export default function App() {
@@ -984,6 +1432,7 @@ export default function App() {
   const [workoutData, setWorkoutData] = useState(() => initialActiveProfile.workoutData || null);
 
   const [editingSet, setEditingSet] = useState(null);
+  const [patternPickerFor, setPatternPickerFor] = useState(null); // 候補を開いている行の setId
   const [editingPart, setEditingPart] = useState(null);
 
   const [printDate, setPrintDate] = useState(() => initialActiveProfile.printDate || getTodayDateStr());
@@ -1014,12 +1463,19 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
 
   const [isClubModalOpen, setIsClubModalOpen] = useState(false);
+  const [clubManagerTab, setClubManagerTab] = useState('clubs'); // clubs | classes | competitions
+  const [newClubClasses, setNewClubClasses] = useState([]);       // 新しいクラブと一緒に登録する開講クラス
+  const [newClubClassDraft, setNewClubClassDraft] = useState(null);
   const [newClubName, setNewClubName] = useState('');
   const [editingClubId, setEditingClubId] = useState(null);
   const [editingClubName, setEditingClubName] = useState('');
 
   // --- 大会登録・管理用ステート ---
   const [isCompetitionModalOpen, setIsCompetitionModalOpen] = useState(false);
+  // 開講クラス（クラブごと）：タップでカテゴリ・レベル・レッスン時間をまとめて切り替える
+  const [classes, setClasses] = useState(() => Array.isArray(initialActiveProfile.classes) ? initialActiveProfile.classes : []);
+  const [isClassModalOpen, setIsClassModalOpen] = useState(false);
+  const [classDraft, setClassDraft] = useState(null);
   const [newCompName, setNewCompName] = useState('');
   const [newCompStartDate, setNewCompStartDate] = useState(() => getTodayDateStr());
   const [newCompEndDate, setNewCompEndDate] = useState(() => getTodayDateStr());
@@ -1059,11 +1515,35 @@ export default function App() {
 
   const [isLogicSettingsOpen, setIsLogicSettingsOpen] = useState(false);
   const [activeLogicTab, setActiveLogicTab] = useState('pace');
+  const [patternGroup, setPatternGroup] = useState('W-Up');
   const [tempSettings, setTempSettings] = useState(logicSettings);
 
   // --- 公開版向け追加ステート（ヘルプ・APIキー・バックアップ・共有通知） ---
-  const [userApiKey, setUserApiKey] = useState(() => safeStorage.getItem('magicMenu_userApiKey') || '');
-  const [geminiModel, setGeminiModel] = useState(() => safeStorage.getItem('magicMenu_geminiModel') || '');
+  // AIの設定：サービスごとにキー・モデルを別々に保存（端末のブラウザ内だけ）。旧Geminiキーはそのまま引き継ぐ
+  const [aiProvider, setAiProvider] = useState(() => {
+    const v = safeStorage.getItem('magicMenu_aiProvider');
+    return AI_PROVIDERS.some(p => p.id === v) ? v : 'gemini';
+  });
+  const [apiKeys, setApiKeys] = useState(() => {
+    let saved = {};
+    try { saved = JSON.parse(safeStorage.getItem('magicMenu_aiKeys') || '{}') || {}; } catch {}
+    return { gemini: safeStorage.getItem('magicMenu_userApiKey') || '', openai: '', anthropic: '', azure: '', ...saved };
+  });
+  const [aiModels, setAiModels] = useState(() => {
+    let saved = {};
+    try { saved = JSON.parse(safeStorage.getItem('magicMenu_aiModels') || '{}') || {}; } catch {}
+    return { gemini: safeStorage.getItem('magicMenu_geminiModel') || '', openai: '', anthropic: '', azure: '', ...saved };
+  });
+  const [azureEndpoint, setAzureEndpoint] = useState(() => safeStorage.getItem('magicMenu_azureEndpoint') || '');
+  const [aiTestState, setAiTestState] = useState(null); // { status: 'testing'|'ok'|'error', message }
+  const activeAiConfig = useMemo(() => ({
+    provider: aiProvider,
+    key: apiKeys[aiProvider] || '',
+    model: aiModels[aiProvider] || '',
+    endpoint: azureEndpoint
+  }), [aiProvider, apiKeys, aiModels, azureEndpoint]);
+  const hasAiKey = Boolean((apiKeys[aiProvider] || '').trim());
+  const userApiKey = apiKeys[aiProvider] || ''; // 旧コードとの互換
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [helpTab, setHelpTab] = useState('guide');
   const [infoToast, setInfoToast] = useState('');
@@ -1080,9 +1560,9 @@ export default function App() {
         const metaViewport = document.querySelector('meta[name=viewport]');
         if (metaViewport) {
           const originalContent = metaViewport.getAttribute('content');
-          metaViewport.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+          metaViewport.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover');
           setTimeout(() => {
-            metaViewport.setAttribute('content', originalContent || 'width=device-width, initial-scale=1.0');
+            metaViewport.setAttribute('content', originalContent || 'width=device-width, initial-scale=1.0, viewport-fit=cover');
           }, 300);
         }
       }
@@ -1118,6 +1598,7 @@ export default function App() {
           printFont,
           printLang,
           competitions,
+          classes,
           showCompetitionOnPrint
         }
       };
@@ -1146,6 +1627,7 @@ export default function App() {
     printFont,
     printLang,
     competitions,
+    classes,
     showCompetitionOnPrint
   ]);
 
@@ -1154,12 +1636,34 @@ export default function App() {
   }, [savedWorkouts]);
 
   useEffect(() => {
-    safeStorage.setItem('magicMenu_userApiKey', userApiKey);
-  }, [userApiKey]);
+    safeStorage.setItem('magicMenu_aiProvider', aiProvider);
+    safeStorage.setItem('magicMenu_aiKeys', JSON.stringify(apiKeys));
+    safeStorage.setItem('magicMenu_userApiKey', apiKeys.gemini || ''); // 旧形式も更新（古い版との互換）
+    safeStorage.setItem('magicMenu_aiModels', JSON.stringify(aiModels));
+    safeStorage.setItem('magicMenu_geminiModel', aiModels.gemini || '');
+    safeStorage.setItem('magicMenu_azureEndpoint', azureEndpoint);
+  }, [aiProvider, apiKeys, aiModels, azureEndpoint]);
 
-  useEffect(() => {
-    safeStorage.setItem('magicMenu_geminiModel', geminiModel);
-  }, [geminiModel]);
+  const runAiConnectionTest = async () => {
+    setAiTestState({ status: 'testing', message: '接続を確認しています…' });
+    try {
+      await testAiConnection(activeAiConfig);
+      setAiTestState({ status: 'ok', message: `${getAiProvider(aiProvider).short} に接続できました。AIモードで使えます。` });
+    } catch (error) {
+      const msg = {
+        NO_KEY: 'APIキーが入力されていません。',
+        BAD_KEY: 'APIキーが正しくないか、無効になっています。',
+        QUOTA: '利用上限に達しているか、残高（クレジット）が不足しています。',
+        NO_MODEL: 'モデル名（Azureはデプロイ名）が見つかりません。',
+        NO_CONFIG: 'エンドポイントとデプロイ名を入力してください。',
+        NETWORK: aiProvider === 'openai'
+          ? '接続できませんでした。通信状態とキーを確認してください（OpenAIはブラウザからの直接接続を受け付けない場合があります）。'
+          : '接続できませんでした。通信状態と入力内容を確認してください。',
+        FORMAT: '接続はできましたが、応答の形式が想定と違いました。別のモデルを試してください。'
+      }[error?.code] || 'エラーが発生しました。しばらくしてから再度お試しください。';
+      setAiTestState({ status: 'error', message: msg });
+    }
+  };
 
   useEffect(() => {
     safeStorage.setItem('magicMenu_clubs', JSON.stringify(clubs));
@@ -1201,6 +1705,7 @@ export default function App() {
     setPrintFont(safeProfile.printFont || 'handwriting');
     setPrintLang(safeProfile.printLang || 'ja');
     setCompetitions(Array.isArray(safeProfile.competitions) ? safeProfile.competitions : []);
+    setClasses(Array.isArray(safeProfile.classes) ? safeProfile.classes : []);
     setShowCompetitionOnPrint(safeProfile.showCompetitionOnPrint !== false);
   }, []);
 
@@ -1219,13 +1724,20 @@ export default function App() {
       id: `club-${Date.now()}`,
       name: trimmed
     };
-    const newProfile = createDefaultClubProfile();
+    const first = newClubClasses[0];
+    const newProfile = createDefaultClubProfile({
+      classes: newClubClasses,
+      ...(first ? { levelCategory: first.levelCategory, levelId: first.levelId, startTime: first.startTime, endTime: first.endTime } : {})
+    });
     const nextProfiles = { ...clubProfiles, [newClub.id]: newProfile };
     setClubs(prev => [...prev, newClub]);
     setClubProfiles(nextProfiles);
     handleSelectClub(newClub.id, nextProfiles);
     setNewClubName('');
-    showToast(`「${trimmed}」を登録しました（専用設定を作成）`);
+    setNewClubClasses([]);
+    showToast(newClubClasses.length
+      ? `「${trimmed}」を開講クラス${newClubClasses.length}件と一緒に登録しました`
+      : `「${trimmed}」を登録しました（専用設定を作成）`);
   };
 
   const handleSaveClubEdit = (clubId) => {
@@ -1347,9 +1859,13 @@ export default function App() {
 
   const handleGenerateMagic = async () => {
     setIsGenerating(true);
+    const keepLocked = (data) => mergeLockedSets(
+      workoutData, data,
+      (type, dist) => generateSetsForPart(type, dist, levelId, purpose, period, logicSettings)
+    );
     
     const distNum = Number(distance) || 0;
-    const validDistance = Math.max(100, roundTo10(distNum));
+    const validDistance = Math.max(100, Math.round(distNum / 50) * 50);
 
     if (useAiMode) {
       try {
@@ -1371,7 +1887,7 @@ export default function App() {
           totalDistance: validDistance
         };
         
-        const aiData = await fetchWorkoutFromGemini(params, logicSettings, userApiKey, geminiModel);
+        const aiData = keepLocked(await fetchWorkoutFromAI(params, logicSettings, activeAiConfig));
         setWorkoutData(aiData);
         const newTotal = aiData.reduce((sum, part) => sum + part.total, 0);
         setDistance(String(newTotal));
@@ -1379,7 +1895,7 @@ export default function App() {
         setActiveTab('workout');
       } catch (error) {
         console.error("AI Generation Error:", error);
-        const data = generateWorkout(levelId, purpose, period, validDistance, logicSettings);
+        const data = keepLocked(generateWorkout(levelId, purpose, period, validDistance, logicSettings));
         setWorkoutData(data);
         const newTotal = data.reduce((sum, part) => sum + part.total, 0);
         setDistance(String(newTotal));
@@ -1389,7 +1905,7 @@ export default function App() {
       }
     } else {
       await new Promise(resolve => setTimeout(resolve, 600));
-      const data = generateWorkout(levelId, purpose, period, validDistance, logicSettings);
+      const data = keepLocked(generateWorkout(levelId, purpose, period, validDistance, logicSettings));
       setWorkoutData(data);
       const newTotal = data.reduce((sum, part) => sum + part.total, 0);
       setDistance(String(newTotal));
@@ -1424,11 +1940,14 @@ export default function App() {
 
     scheduledWorkoutData.parts.forEach(part => {
       text += `■ ${part.name} (${part.total}m)\n`;
-      part.sets.forEach(set => {
+      part.sets.forEach((set, setIdx) => {
         const setsStr = set.setsCount > 1 ? `×${set.setsCount}set` : '';
         const circleStr = set.circle ? ` (${set.circle})` : '';
         const restStr = (set.setsCount > 1 && set.restSeconds > 0) ? ` [SetRest:${formatTime(set.restSeconds)}]` : '';
         text += `  ・${set.distance}m×${set.reps}${setsStr} ${set.style}${circleStr}${restStr} ${set.description || ''}\n`;
+        if (setIdx < part.sets.length - 1 && Number(set.itemRestSeconds) > 0) {
+          text += `    [Rest: ${formatTime(set.itemRestSeconds)}]\n`;
+        }
       });
       if (part.partRestSeconds > 0) {
         text += `  [Rest: ${formatTime(part.partRestSeconds)}]\n`;
@@ -1480,7 +1999,19 @@ export default function App() {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const parsed = JSON.parse(event.target.result);
+        applyBackupData(JSON.parse(event.target.result));
+      } catch (err) {
+        showToast('ファイルの形式が正しくありません');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  // バックアップの内容を反映する（ファイル・テキストどちらからも）
+  const applyBackupData = (parsed) => {
+    {
+      {
         const restoredClubs = Array.isArray(parsed.clubs) && parsed.clubs.length > 0 ? parsed.clubs : clubs;
         const restoredClubId = parsed.currentClubId && restoredClubs.some(c => c.id === parsed.currentClubId)
           ? parsed.currentClubId
@@ -1506,18 +2037,135 @@ export default function App() {
         }
         showToast('バックアップデータを復元しました！');
         setIsHelpOpen(false);
-      } catch (err) {
-        showToast('ファイルの形式が正しくありません');
       }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
+    }
+  };
+
+  // --- テキストで引き継ぎ ---
+  // データを gzip 圧縮して英数字（Base64）にし、「MSM1:」を付けたテキストにする。
+  // LINE やメールに貼れる長さに縮める。圧縮できないブラウザでは JSON のまま（MSM0:）。
+  const buildBackupObject = () => ({
+    version: 3,
+    exportedAt: new Date().toISOString(),
+    clubs,
+    currentClubId,
+    clubProfiles,
+    savedWorkouts,
+    logicSettings
+  });
+  const bytesToBase64 = (bytes) => {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  };
+  const base64ToBytes = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const encodeTransferText = async () => {
+    const json = JSON.stringify(buildBackupObject());
+    if (typeof CompressionStream !== 'undefined') {
+      const stream = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+      const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+      return 'MSM1:' + bytesToBase64(bytes);
+    }
+    return 'MSM0:' + bytesToBase64(new TextEncoder().encode(json));
+  };
+  const decodeTransferText = async (raw) => {
+    const t = String(raw || '').replace(/\s+/g, '');
+    const m = t.match(/MSM([01]):([A-Za-z0-9+/=]+)/);
+    if (!m) {
+      // 念のため、JSON がそのまま貼られた場合も受け付ける
+      const j = String(raw || '').trim();
+      if (j.startsWith('{')) return JSON.parse(j);
+      throw new Error('format');
+    }
+    const bytes = base64ToBytes(m[2]);
+    if (m[1] === '0') return JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof DecompressionStream === 'undefined') throw new Error('unsupported');
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return JSON.parse(await new Response(stream).text());
+  };
+
+  const [transferText, setTransferText] = useState('');      // 書き出したテキスト
+  const [transferInput, setTransferInput] = useState('');    // 貼り付けられたテキスト
+  const [transferPreview, setTransferPreview] = useState(null); // 読み込む前の確認 { data, summary }
+  const [transferError, setTransferError] = useState('');
+
+  const copyTextToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text; document.body.appendChild(ta); ta.select();
+        const okCopy = document.execCommand('copy');
+        document.body.removeChild(ta);
+        return okCopy;
+      } catch { return false; }
+    }
+  };
+
+  const handleCopyTransferText = async () => {
+    const text = await encodeTransferText();
+    setTransferText(text);
+    const copied = await copyTextToClipboard(text);
+    showToast(copied ? '引き継ぎ用テキストをコピーしました' : '下の枠のテキストを手動でコピーしてください');
+  };
+
+  const handleShareTransferText = async () => {
+    const text = transferText || await encodeTransferText();
+    setTransferText(text);
+    try {
+      await navigator.share({ title: 'Masters Swim Menu 引き継ぎデータ', text });
+    } catch {}
+  };
+
+  const handlePreviewTransfer = async (rawText) => {
+    setTransferError('');
+    setTransferPreview(null);
+    try {
+      const data = await decodeTransferText(rawText);
+      if (!data || typeof data !== 'object' || (!Array.isArray(data.clubs) && !data.clubProfiles)) throw new Error('format');
+      const profiles = data.clubProfiles || {};
+      const summary = {
+        clubs: (data.clubs || []).map(c => c.name),
+        classes: Object.values(profiles).reduce((n, pr) => n + ((pr && pr.classes) || []).length, 0),
+        competitions: Object.values(profiles).reduce((n, pr) => n + ((pr && pr.competitions) || []).length, 0),
+        saved: (data.savedWorkouts || []).length,
+        exportedAt: data.exportedAt ? new Date(data.exportedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
+      };
+      setTransferPreview({ data, summary });
+    } catch (err) {
+      setTransferError(err?.message === 'unsupported'
+        ? 'このブラウザは圧縮データの読み込みに対応していません。ブラウザを最新にするか、バックアップファイルで引き継いでください。'
+        : '引き継ぎ用のテキストとして読み取れませんでした。途中で切れていないか確認してください。');
+    }
+  };
+
+  const handlePasteFromClipboard = async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      setTransferInput(text);
+      handlePreviewTransfer(text);
+    } catch {
+      setTransferError('自動で貼り付けできませんでした。下の枠を長押しして「ペースト」してください。');
+    }
+  };
+
+  const confirmTransferImport = () => {
+    if (!transferPreview) return;
+    applyBackupData(transferPreview.data);
+    setTransferPreview(null);
+    setTransferInput('');
   };
 
   const regenerateWithNewParams = (newLevelId, newPurpose, newPeriod, newDistance) => {
     const distNum = Number(newDistance !== undefined ? newDistance : distance) || 0;
-    const validDistance = Math.max(100, roundTo10(distNum));
-    const newData = generateWorkout(newLevelId, newPurpose, newPeriod, validDistance, logicSettings);
+    const validDistance = Math.max(100, Math.round(distNum / 50) * 50);
+    const newData = mergeLockedSets(
+      workoutData,
+      generateWorkout(newLevelId, newPurpose, newPeriod, validDistance, logicSettings),
+      (type, dist) => generateSetsForPart(type, dist, newLevelId, newPurpose, newPeriod, logicSettings)
+    );
     setWorkoutData(newData);
     const newTotal = newData.reduce((sum, part) => sum + part.total, 0);
     setDistance(String(newTotal));
@@ -1557,12 +2205,16 @@ export default function App() {
     const startObj = new Date(currentTime);
 
     const dataWithSchedule = workoutData.map(part => {
-      const scheduledSets = part.sets.map(set => {
+      const scheduledSets = part.sets.map((set, setIdx) => {
         const setStart = new Date(currentTime);
         const duration = getSetDuration(set, levelId, logicSettings);
         currentTime = new Date(currentTime.getTime() + duration * 1000);
         const setEnd = new Date(currentTime);
-        return { ...set, setStart, setEnd };
+        // 項目間Rest：同じパートの次の項目までの休憩
+        const itemRest = setIdx < part.sets.length - 1 ? (Number(set.itemRestSeconds) || 0) : 0;
+        const itemRestStart = new Date(currentTime);
+        if (itemRest > 0) currentTime = new Date(currentTime.getTime() + itemRest * 1000);
+        return { ...set, setStart, setEnd, itemRestStart, itemRestEnd: new Date(currentTime) };
       });
       
       const partRestStart = new Date(currentTime);
@@ -1592,9 +2244,81 @@ export default function App() {
 
   useEffect(() => {
     if (scheduledWorkoutData) {
-      setPrintTime(`${formatTimeObj(scheduledWorkoutData.startTime)}-${formatTimeObj(scheduledWorkoutData.endTime)}`);
+      // 推定終了時刻ではなく、開講しているレッスン時間を表示する
+      setPrintTime(`${startTime}-${endTime}`);
     }
-  }, [scheduledWorkoutData]);
+  }, [scheduledWorkoutData, startTime, endTime]);
+
+  const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+  const classLabel = (c) => `${c.weekday !== '' && c.weekday != null ? WEEKDAYS[c.weekday] + '曜 ' : ''}${c.name}`;
+  const levelNameOf = (id) => logicSettings.levels.find(l => l.id === id)?.name || '';
+  // 現在の設定（カテゴリ・レベル・時間）と一致しているクラスを「選択中」とする
+  const isClassActive = (c) => c.levelId === levelId && c.startTime === startTime && c.endTime === endTime;
+
+  const applyClass = (c) => {
+    const cat = c.levelCategory || (String(c.levelId).startsWith('special') ? 'special' : 'enjoy');
+    setLevelCategory(cat);
+    setLevelId(c.levelId);
+    if (c.startTime) setStartTime(c.startTime);
+    if (c.endTime) setEndTime(c.endTime);
+    showToast(`「${classLabel(c)}」に切り替えました`);
+  };
+
+  const openClubManager = (tab = 'clubs') => {
+    setClassDraft({ id: null, name: '', weekday: '', startTime, endTime, levelCategory, levelId });
+    setNewClubClassDraft(d => d || { id: null, name: '', weekday: '', startTime: '10:00', endTime: '11:00', levelCategory: 'enjoy', levelId: 'enjoy-intermediate' });
+    setClubManagerTab(tab);
+    setIsClubModalOpen(true);
+  };
+
+  const addNewClubClass = () => {
+    if (!newClubClassDraft) return;
+    const d = newClubClassDraft;
+    const item = {
+      id: `class-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      name: d.name.trim() || `${d.startTime}クラス`,
+      weekday: d.weekday === '' ? '' : Number(d.weekday),
+      startTime: d.startTime, endTime: d.endTime, levelCategory: d.levelCategory, levelId: d.levelId
+    };
+    setNewClubClasses(prev => [...prev, item]);
+    setNewClubClassDraft({ ...d, name: '' });
+  };
+
+  const openClassModal = () => {
+    setClassDraft({ id: null, name: '', weekday: '', startTime, endTime, levelCategory, levelId });
+    setIsClassModalOpen(true);
+  };
+
+  const saveClassDraft = () => {
+    if (!classDraft) return;
+    const name = classDraft.name.trim() || `${classDraft.startTime}クラス`;
+    const item = {
+      id: classDraft.id || `class-${Date.now()}`,
+      name,
+      weekday: classDraft.weekday === '' ? '' : Number(classDraft.weekday),
+      startTime: classDraft.startTime,
+      endTime: classDraft.endTime,
+      levelCategory: classDraft.levelCategory,
+      levelId: classDraft.levelId
+    };
+    setClasses(prev => {
+      const exists = prev.some(c => c.id === item.id);
+      const next = exists ? prev.map(c => c.id === item.id ? item : c) : [...prev, item];
+      // 曜日 → 開始時刻 の順に並べる（曜日なしは最後）
+      return next.sort((a, b) => {
+        const wa = a.weekday === '' ? 9 : (Number(a.weekday) + 6) % 7;
+        const wb = b.weekday === '' ? 9 : (Number(b.weekday) + 6) % 7;
+        return wa - wb || String(a.startTime).localeCompare(String(b.startTime));
+      });
+    });
+    showToast(classDraft.id ? 'クラスを更新しました' : 'クラスを登録しました');
+    setClassDraft({ id: null, name: '', weekday: '', startTime: item.startTime, endTime: item.endTime, levelCategory: item.levelCategory, levelId: item.levelId });
+  };
+
+  const deleteClass = (id) => {
+    setClasses(prev => prev.filter(c => c.id !== id));
+    setClassDraft(d => (d && d.id === id ? { ...d, id: null, name: '' } : d));
+  };
 
   const updatePartName = (partId, newName) => {
     setWorkoutData(prev => prev.map(p => p.id === partId ? { ...p, name: newName } : p));
@@ -1639,13 +2363,18 @@ export default function App() {
   };
 
   const handlePartTotalCommit = (partId, value) => {
-    const newTotal = roundTo10(Number(value) || 0);
+    const newTotal = roundTo25(Number(value) || 0);
     setWorkoutData(prev => {
       const newData = prev.map(p => {
         if (p.id === partId) {
-          const newSets = generateSetsForPart(p.type || 'Main', newTotal, levelId, purpose, period, logicSettings);
-          const actualDist = newSets.reduce((sum, s) => sum + (s.distance * s.reps * s.setsCount), 0);
-          return { ...p, total: actualDist, sets: newSets };
+          const locked = p.sets.filter(st => st.locked);
+          const remaining = Math.max(0, roundTo25(newTotal - sumSetsDistance(locked)));
+          const fresh = remaining > 0 ? generateSetsForPart(p.type || 'Main', remaining, levelId, purpose, period, logicSettings) : [];
+          const queue = [...fresh];
+          const newSets = [];
+          p.sets.forEach(st => { if (st.locked) newSets.push(st); else if (queue.length) newSets.push(queue.shift()); });
+          newSets.push(...queue);
+          return { ...p, total: sumSetsDistance(newSets), sets: newSets };
         }
         return p;
       });
@@ -1658,6 +2387,7 @@ export default function App() {
   const addNewSetToPart = (partId) => {
     setWorkoutData(prev => prev.map(part => {
       if (part.id === partId) {
+        const circleSeconds = Math.max(20, calculateCircle(50, levelId, 1.1, logicSettings));
         const newSet = {
           id: `set-${Date.now()}-${Math.random()}`,
           distance: 50,
@@ -1665,8 +2395,8 @@ export default function App() {
           setsCount: 1,
           restSeconds: 0,
           style: 'Choice',
-          circle: null,
-          circleSeconds: 0,
+          circle: formatTime(circleSeconds),
+          circleSeconds,
           description: '追加メニュー'
         };
         const newSets = [...part.sets, newSet];
@@ -1675,6 +2405,39 @@ export default function App() {
       }
       return part;
     }));
+  };
+
+  // 練習項目の1項目を直接書き換える（距離・本数などが変わればパート合計も更新）
+  const updateSetFields = (partId, setId, patch) => {
+    setWorkoutData(prev => prev.map(part => {
+      if (part.id !== partId) return part;
+      const newSets = part.sets.map(st => {
+        if (st.id !== setId) return st;
+        const next = { ...st, ...patch };
+        if ('circleSeconds' in patch) next.circle = patch.circleSeconds > 0 ? formatTime(patch.circleSeconds) : null;
+        return next;
+      });
+      return { ...part, sets: newSets, total: sumSetsDistance(newSets) };
+    }));
+  };
+
+  const toggleSetLock = (partId, setId) => {
+    setWorkoutData(prev => prev.map(part => part.id !== partId ? part : {
+      ...part, sets: part.sets.map(st => st.id === setId ? { ...st, locked: !st.locked } : st)
+    }));
+  };
+
+  const togglePartLock = (partId) => {
+    setWorkoutData(prev => prev.map(part => {
+      if (part.id !== partId) return part;
+      const allLocked = part.sets.length > 0 && part.sets.every(st => st.locked);
+      return { ...part, sets: part.sets.map(st => ({ ...st, locked: !allLocked })) };
+    }));
+  };
+
+  const unlockAllSets = () => {
+    setWorkoutData(prev => prev.map(part => ({ ...part, sets: part.sets.map(st => ({ ...st, locked: false })) })));
+    showToast('すべてのロックを解除しました');
   };
 
   const deleteSetDirect = (partId, setId) => {
@@ -1698,7 +2461,9 @@ export default function App() {
       restSeconds: set.restSeconds || 0,
       circleSeconds: set.circleSeconds || 0,
       style: set.style || 'Choice',
-      description: set.description || ''
+      description: set.description || '',
+      locked: Boolean(set.locked),
+      itemRestSeconds: Number(set.itemRestSeconds) || 0
     });
   };
 
@@ -1717,7 +2482,9 @@ export default function App() {
               circleSeconds: editingSet.circleSeconds,
               circle: editingSet.circleSeconds > 0 ? formatTime(editingSet.circleSeconds) : null,
               style: editingSet.style,
-              description: editingSet.description
+              description: editingSet.description,
+              locked: editingSet.locked,
+              itemRestSeconds: editingSet.itemRestSeconds
             };
           }
           return s;
@@ -1914,10 +2681,10 @@ export default function App() {
 
     const textsArray = Array.from(textsToTranslate).filter(t => !aiTranslations[langId]?.[t]);
 
-    if (textsArray.length > 0 && userApiKey.trim()) {
+    if (textsArray.length > 0 && hasAiKey) {
       setIsTranslating(true);
       try {
-        const newTranslations = await translateWithGemini(textsArray, langId, userApiKey, geminiModel);
+        const newTranslations = await translateWithAI(textsArray, langId, activeAiConfig);
         setAiTranslations(prev => ({
           ...prev,
           [langId]: { ...(prev[langId] || {}), ...newTranslations }
@@ -1985,6 +2752,73 @@ export default function App() {
     }, duration);
   }, []);
 
+  // --- A4用紙1枚にぴったり印刷するためのレイアウト計算 ---
+  // メニューカードの幅を変えながら高さを測り、A4の余白内に最も大きく収まる幅と倍率を求める。
+  // 結果はCSS変数として <html> に渡し、印刷時だけ styles.css のルールで適用する（画面表示は変えない）。
+  const preparePrintLayout = useCallback(() => {
+    const root = document.documentElement;
+    const card = printCardRef.current;
+    if (!card || activeTab !== 'print' || isScreenshotMode) {
+      root.classList.remove('mm-print-card');
+      return;
+    }
+    const MM = 96 / 25.4;           // 1mm あたりのCSSピクセル
+    const MARGIN = 8;               // 用紙の余白(mm)。家庭用プリンタでも欠けない幅
+    const PW = (210 - MARGIN * 2) * MM;
+    const PH = (297 - MARGIN * 2) * MM;
+
+    const prevWidth = card.style.width;
+    const prevMaxWidth = card.style.maxWidth;
+    const prevTransform = card.style.transform;
+    card.style.maxWidth = 'none';
+    card.style.transform = 'none';
+    let best = null;
+    for (let w = 380; w <= 760; w += 20) {
+      card.style.width = `${w}px`;
+      const h = card.offsetHeight;
+      const scale = Math.min(PW / w, PH / h);
+      const area = w * h * scale * scale;
+      if (!best || area > best.area + 1) best = { w, h, scale, area };
+    }
+    card.style.width = prevWidth;
+    card.style.maxWidth = prevMaxWidth;
+    card.style.transform = prevTransform;
+
+    // カードの高さは「用紙の高さ÷倍率」に固定し、余った縦の空きは印刷用CSSで各行に配分する
+    // （メニューが短くても用紙の縦いっぱいに広がり、長い場合は全体を縮小して1枚に収める）
+    const scale = best.scale * 0.97; // 印刷時のフォント描画差による はみ出し防止
+    const tx = MARGIN * MM + (PW - best.w * scale) / 2;
+    const ty = MARGIN * MM + (PH - (PH / best.scale) * scale) / 2;
+    root.style.setProperty('--mm-print-w', `${best.w}px`);
+    root.style.setProperty('--mm-print-h', `${PH / best.scale}px`);
+    root.style.setProperty('--mm-print-transform', `translate(${tx}px, ${ty}px) scale(${scale})`);
+    root.classList.add('mm-print-card');
+  }, [activeTab, isScreenshotMode]);
+
+  // 日付・時刻の入力欄は、どこをタップしても選択画面（カレンダー・時刻）を開く
+  useEffect(() => {
+    const onClick = (e) => {
+      const el = e.target;
+      if (!(el instanceof HTMLInputElement)) return;
+      if (!['date', 'time', 'datetime-local', 'month'].includes(el.type)) return;
+      try { el.showPicker && el.showPicker(); } catch {}
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, []);
+
+  // ブラウザのメニューやショートカット(Ctrl/Cmd+P)から印刷した場合も同じレイアウトにする
+  useEffect(() => {
+    const before = () => preparePrintLayout();
+    const after = () => document.documentElement.classList.remove('mm-print-card');
+    window.addEventListener('beforeprint', before);
+    window.addEventListener('afterprint', after);
+    return () => {
+      window.removeEventListener('beforeprint', before);
+      window.removeEventListener('afterprint', after);
+    };
+  }, [preparePrintLayout]);
+
   // スリープ防止 (Wake Lock API) の制御
   useEffect(() => {
     const requestWakeLock = async () => {
@@ -2038,6 +2872,318 @@ export default function App() {
         : levelCategory === 'enjoy'
           ? 'bg-gradient-to-br from-blue-100 via-cyan-50 to-indigo-100 animate-gradient'
           : 'bg-gradient-to-br from-rose-100 via-fuchsia-50 to-purple-100 animate-gradient';
+
+  // --- クラブ管理で共通に使う部品（開講クラスの入力欄・クラス編集・大会編集） ---
+  const renderClassFields = (draft, setDraft) => (
+    <>
+                <div className="grid grid-cols-[1fr_auto] gap-1.5">
+                  <input
+                    type="text"
+                    value={draft.name}
+                    onChange={(e) => setDraft(d => ({ ...d, name: e.target.value }))}
+                    placeholder="クラス名（例：中級クラス）"
+                    className="glass-input bg-white rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 outline-none border-slate-300/70 min-w-0"
+                  />
+                  <select
+                    aria-label="曜日"
+                    value={draft.weekday}
+                    onChange={(e) => setDraft(d => ({ ...d, weekday: e.target.value }))}
+                    className="glass-input bg-white rounded-lg px-1.5 py-1.5 text-xs font-bold text-slate-800 outline-none border-slate-300/70"
+                  >
+                    <option value="">曜日なし</option>
+                    {[1, 2, 3, 4, 5, 6, 0].map(w => <option key={w} value={w}>{WEEKDAYS[w]}曜</option>)}
+                  </select>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-black text-slate-500 w-16 shrink-0 whitespace-nowrap">レッスン時間</span>
+                  <input type="time" aria-label="開始時刻" value={draft.startTime} onChange={(e) => setDraft(d => ({ ...d, startTime: e.target.value }))} className="glass-input bg-white rounded-lg px-1.5 py-1 text-xs font-black text-slate-800 outline-none border-slate-300/70 min-w-0 flex-1 max-w-[128px]" />
+                  <span className="text-slate-400 font-bold text-xs">~</span>
+                  <input type="time" aria-label="終了時刻" value={draft.endTime} onChange={(e) => setDraft(d => ({ ...d, endTime: e.target.value }))} className="glass-input bg-white rounded-lg px-1.5 py-1 text-xs font-black text-slate-800 outline-none border-slate-300/70 min-w-0 flex-1 max-w-[128px]" />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-black text-slate-500 w-16 shrink-0 whitespace-nowrap">泳力レベル</span>
+                  <div className="flex rounded-lg border border-slate-300/70 overflow-hidden shrink-0">
+                    {LEVEL_CATEGORIES.map(cat => (
+                      <button
+                        key={cat.id}
+                        onClick={() => setDraft(d => ({ ...d, levelCategory: cat.id, levelId: logicSettings.levels.find(l => l.category === cat.id && l.name === levelNameOf(d.levelId))?.id || logicSettings.levels.find(l => l.category === cat.id)?.id }))}
+                        aria-pressed={draft.levelCategory === cat.id}
+                        className={`px-2 py-1 text-[10px] font-black ${draft.levelCategory === cat.id ? (cat.id === 'enjoy' ? 'bg-blue-500 text-white' : 'bg-rose-500 text-white') : 'bg-white text-slate-500'}`}
+                      >
+                        {cat.id === 'enjoy' ? 'エンジョイ' : 'スペシャル'}
+                      </button>
+                    ))}
+                  </div>
+                  <select
+                    aria-label="レベル"
+                    value={draft.levelId}
+                    onChange={(e) => setDraft(d => ({ ...d, levelId: e.target.value }))}
+                    className="glass-input bg-white rounded-lg px-1.5 py-1 text-xs font-black text-slate-800 outline-none border-slate-300/70"
+                  >
+                    {logicSettings.levels.filter(l => l.category === draft.levelCategory).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  </select>
+                </div>
+    </>
+  );
+
+  const classEditorBody = classDraft ? (
+    <div className="space-y-3">
+              <div className="text-[11px] font-bold text-slate-500 bg-blue-50/70 p-2 rounded-lg border border-blue-100">
+                クラスを登録しておくと、条件設定の画面でタップするだけで「エンジョイ／スペシャル」「レベル」「レッスン時間」がまとめて切り替わります。
+              </div>
+
+              {/* 入力フォーム */}
+              <div className="p-2.5 rounded-xl bg-white/80 border border-slate-200 space-y-2">
+                <div className="text-[11px] font-black text-slate-700">{classDraft.id ? 'クラスを編集' : '新しいクラスを登録'}</div>
+                {renderClassFields(classDraft, setClassDraft)}
+                <div className="flex justify-end gap-1.5 pt-0.5">
+                  {classDraft.id && (
+                    <button onClick={() => setClassDraft(d => ({ ...d, id: null, name: '' }))} className="px-3 py-1.5 rounded-lg text-[11px] font-black text-slate-500 bg-white border border-slate-300">
+                      新規登録に戻る
+                    </button>
+                  )}
+                  <button onClick={saveClassDraft} className="px-3 py-1.5 rounded-lg text-[11px] font-black text-white bg-blue-500 hover:bg-blue-600 shadow-sm active:scale-95 flex items-center gap-1">
+                    {classDraft.id ? <><Check className="w-3.5 h-3.5" /> 更新する</> : <><Plus className="w-3.5 h-3.5" /> 登録する</>}
+                  </button>
+                </div>
+              </div>
+
+              {/* 登録済みクラス */}
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-black text-slate-500 pl-0.5">登録済みのクラス（{classes.length}件）</div>
+                {classes.length === 0 && <div className="text-[11px] font-bold text-slate-400 text-center py-2">まだありません</div>}
+                {classes.map(c => (
+                  <div key={c.id} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border ${classDraft.id === c.id ? 'bg-blue-50 border-blue-300' : 'bg-white/80 border-slate-200'}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[11px] font-black text-slate-800 truncate">{classLabel(c)}</div>
+                      <div className="text-[9.5px] font-bold text-slate-500">{c.startTime}-{c.endTime}・{String(c.levelId).startsWith('special') ? 'スペシャル' : 'エンジョイ'}{levelNameOf(c.levelId)}</div>
+                    </div>
+                    <button title="このクラスを編集" onClick={() => setClassDraft({ ...c, weekday: c.weekday === '' ? '' : String(c.weekday) })} className="glass-btn w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 border-slate-300/50">
+                      <Settings className="w-3.5 h-3.5" />
+                    </button>
+                    <button title="このクラスを削除" onClick={() => deleteClass(c.id)} className="glass-btn w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 border-slate-300/50">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+                </div>
+  ) : null;
+
+  const competitionEditorBody = (
+    <div className="space-y-4">
+              <div className="flex items-center justify-between bg-amber-50/80 border border-amber-200/80 rounded-xl p-2.5">
+                <div className="text-[11px] font-bold text-amber-900 leading-snug">
+                  登録した大会のうち、練習日（表示日）から最も近い大会名と残り日数がメニュー表示画面に自動表示されます。
+                </div>
+                <label className="flex items-center gap-1.5 shrink-0 ml-2 cursor-pointer select-none bg-white px-2.5 py-1.5 rounded-lg border border-amber-200 shadow-sm">
+                  <input
+                    type="checkbox"
+                    checked={showCompetitionOnPrint}
+                    onChange={(e) => setShowCompetitionOnPrint(e.target.checked)}
+                    className="accent-amber-500 w-3.5 h-3.5 cursor-pointer"
+                  />
+                  <span className="text-[10px] font-black text-slate-700">メニュー表示</span>
+                </label>
+              </div>
+
+              {/* 新規大会追加フォーム */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between px-1">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">新しい大会を追加</label>
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${competitions.length >= MAX_COMPETITIONS ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-600'}`}>
+                    登録数: {competitions.length} / {MAX_COMPETITIONS}
+                  </span>
+                </div>
+
+                {competitions.length >= MAX_COMPETITIONS ? (
+                  <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-600 text-center">
+                    最大{MAX_COMPETITIONS}大会まで登録済みです。新しく追加する場合は既存の大会を削除してください。
+                  </div>
+                ) : (
+                  <div className="space-y-2 glass-panel p-2.5 rounded-xl border-slate-200/80">
+                    <input
+                      type="text"
+                      value={newCompName}
+                      onChange={(e) => setNewCompName(e.target.value)}
+                      onCompositionStart={handleCompositionStart}
+                      onCompositionEnd={handleCompositionEnd}
+                      onKeyDown={(e) => { if (isEnterWithoutIme(e)) handleAddCompetition(); }}
+                      placeholder="大会名（例：ジャパンマスターズ）"
+                      className="w-full p-2 rounded-xl glass-input text-slate-800 font-bold text-xs focus:ring-2 focus:ring-amber-400 outline-none border-slate-300/80"
+                    />
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] font-black text-slate-500 pl-1 shrink-0">開催期間:</span>
+                      <input
+                        type="date"
+                        value={newCompStartDate}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setNewCompStartDate(val);
+                          if (!newCompEndDate || newCompEndDate < val) {
+                            setNewCompEndDate(val);
+                          }
+                        }}
+                        className="flex-1 min-w-[115px] p-1.5 rounded-xl glass-input text-slate-800 font-bold text-[11px] focus:ring-2 focus:ring-amber-400 outline-none border-slate-300/80"
+                      />
+                      <span className="text-xs font-black text-slate-400">〜</span>
+                      <input
+                        type="date"
+                        value={newCompEndDate}
+                        min={newCompStartDate}
+                        onChange={(e) => setNewCompEndDate(e.target.value)}
+                        className="flex-1 min-w-[115px] p-1.5 rounded-xl glass-input text-slate-800 font-bold text-[11px] focus:ring-2 focus:ring-amber-400 outline-none border-slate-300/80"
+                      />
+                      <button
+                        onClick={handleAddCompetition}
+                        disabled={!newCompName.trim() || !newCompStartDate}
+                        className="w-full sm:w-auto px-3.5 py-2 rounded-xl text-xs font-black text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-40 shadow-sm transition-all active:scale-95 shrink-0 flex items-center justify-center gap-1"
+                      >
+                        <Plus className="w-4 h-4" /> 追加
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 登録済み大会一覧 */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider pl-1">
+                  {currentClub.name} の登録大会一覧
+                </label>
+
+                {competitions.length === 0 ? (
+                  <div className="text-center p-6 rounded-2xl bg-slate-50/80 border border-dashed border-slate-300 text-slate-400 space-y-1">
+                    <Trophy className="w-7 h-7 mx-auto opacity-40 text-amber-500" />
+                    <p className="text-xs font-black">まだ大会が登録されていません</p>
+                    <p className="text-[10px] font-bold">上のフォームから最大{MAX_COMPETITIONS}件まで大会を登録できます</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {competitions.map(comp => {
+                      const days = getCompetitionDaysUntil(comp, printDate);
+                      const isNearest = nearestCompetition?.id === comp.id;
+                      const isEditing = editingCompId === comp.id;
+
+                      return (
+                        <div
+                          key={comp.id}
+                          className={`p-2.5 rounded-xl border transition-all ${
+                            isNearest
+                              ? 'bg-amber-50/90 border-amber-400 shadow-sm'
+                              : 'glass-panel border-slate-200/80'
+                          }`}
+                        >
+                          {isEditing ? (
+                            <div className="space-y-2">
+                              <input
+                                type="text"
+                                value={editingCompName}
+                                onChange={(e) => setEditingCompName(e.target.value)}
+                                onCompositionStart={handleCompositionStart}
+                                onCompositionEnd={handleCompositionEnd}
+                                onKeyDown={(e) => { if (isEnterWithoutIme(e)) handleSaveCompetitionEdit(comp.id); }}
+                                className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-amber-400 text-xs font-black text-slate-800 outline-none"
+                                placeholder="大会名"
+                                autoFocus
+                              />
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-[10px] font-black text-slate-500">期間:</span>
+                                <input
+                                  type="date"
+                                  value={editingCompStartDate}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setEditingCompStartDate(val);
+                                    if (!editingCompEndDate || editingCompEndDate < val) {
+                                      setEditingCompEndDate(val);
+                                    }
+                                  }}
+                                  className="flex-1 min-w-[110px] px-2 py-1 rounded-lg bg-white border border-amber-400 text-[11px] font-black text-slate-800 outline-none"
+                                />
+                                <span className="text-xs font-black text-slate-400">〜</span>
+                                <input
+                                  type="date"
+                                  value={editingCompEndDate}
+                                  min={editingCompStartDate}
+                                  onChange={(e) => setEditingCompEndDate(e.target.value)}
+                                  className="flex-1 min-w-[110px] px-2 py-1 rounded-lg bg-white border border-amber-400 text-[11px] font-black text-slate-800 outline-none"
+                                />
+                              </div>
+                              <div className="flex justify-end gap-1.5">
+                                <button
+                                  onClick={() => handleSaveCompetitionEdit(comp.id)}
+                                  className="px-3 py-1 rounded-lg bg-amber-500 text-white text-[10px] font-black"
+                                >
+                                  保存
+                                </button>
+                                <button
+                                  onClick={() => setEditingCompId(null)}
+                                  className="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-600 text-[10px] font-black"
+                                >
+                                  取消
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  {isNearest && (
+                                    <span className="text-[9px] font-black bg-amber-500 text-white px-1.5 py-0.5 rounded shadow-sm shrink-0">
+                                      直近大会
+                                    </span>
+                                  )}
+                                  <span className="font-black text-xs text-slate-800 truncate">{comp.name}</span>
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5 text-[10px] font-bold text-slate-500 flex-wrap">
+                                  <span>📅 {formatCompetitionPeriod(comp, true)}</span>
+                                  {days !== null && (
+                                    <span className={`font-black px-1.5 py-0.2 rounded ${
+                                      days === 0
+                                        ? 'bg-rose-100 text-rose-600'
+                                        : days > 0
+                                          ? 'bg-amber-100/80 text-amber-800'
+                                          : 'bg-slate-200 text-slate-500'
+                                    }`}>
+                                      {days === 0 ? '本日開催！' : days > 0 ? `あと${days}日` : `${Math.abs(days)}日前`}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  onClick={() => {
+                                    const sDate = comp.startDate || comp.date || getTodayDateStr();
+                                    const eDate = comp.endDate || sDate;
+                                    setEditingCompId(comp.id);
+                                    setEditingCompName(comp.name);
+                                    setEditingCompStartDate(sDate);
+                                    setEditingCompEndDate(eDate);
+                                  }}
+                                  className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-white/80 transition-colors"
+                                  title="大会を編集"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteCompetition(comp.id)}
+                                  className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-white/80 transition-colors"
+                                  title="大会を削除"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+                </div>
+  );
 
   return (
     <div className={`flex flex-col h-screen font-sans text-slate-800 transition-colors duration-1000 ${appBg} overflow-hidden`}>
@@ -2251,21 +3397,6 @@ export default function App() {
             -moz-appearance: textfield;
           }
 
-          @media print {
-            body, html {
-              background: #ffffff !important;
-              height: auto !important;
-              overflow: visible !important;
-            }
-            main {
-              overflow: visible !important;
-              height: auto !important;
-              padding: 0 !important;
-            }
-            .print-area {
-              box-shadow: none !important;
-            }
-          }
         `}
       </style>
 
@@ -2311,10 +3442,17 @@ export default function App() {
         </div>
       )}
 
+      <IconTooltips />
+
+      {/* iPhoneでホーム画面から開いたときのステータスバー下地（通常のブラウザでは高さ0） */}
+      {!isScreenshotMode && (
+        <div className="shrink-0 bg-[#002A5C] print:hidden" style={{ height: 'env(safe-area-inset-top)' }} />
+      )}
+
       {/* 全画面共通ヘッダー (印刷時のみ非表示) */}
       {!isScreenshotMode && (
-      <header className={`glass-panel px-3 py-2 flex items-center justify-between z-10 relative border-x-0 border-t-0 border-b rounded-none overflow-hidden transition-all duration-500 print:hidden ${isSpecialTheme ? 'border-orange-500/80 shadow-[0_4px_24px_-2px_rgba(242,160,61,0.6)]' : activeTab === 'saved' ? 'border-emerald-300/60 shadow-sm' : isNeutralTab ? 'border-slate-300/60 shadow-sm' : 'border-slate-300/60'}`}>
-        <div className={`absolute inset-0 pointer-events-none z-0 mix-blend-multiply transition-all duration-500 ${isSpecialTheme ? 'bg-shoulder-pattern-special opacity-[0.85]' : isNeutralTab ? 'bg-shoulder-pattern-enjoy opacity-[0.15] grayscale' : 'bg-shoulder-pattern-enjoy opacity-[0.85]'}`}></div>
+      <header className={`glass-panel header-solid px-3 py-2 flex items-center justify-between z-10 relative border-x-0 border-t-0 border-b rounded-none overflow-hidden transition-all duration-500 print:hidden ${isSpecialTheme ? 'border-orange-500/80 shadow-[0_4px_24px_-2px_rgba(242,160,61,0.6)]' : activeTab === 'saved' ? 'border-emerald-300/60 shadow-sm' : isNeutralTab ? 'border-slate-300/60 shadow-sm' : 'border-slate-300/60'}`}>
+        <div className={`absolute inset-0 pointer-events-none z-0 transition-all duration-500 ${isSpecialTheme ? 'bg-shoulder-pattern-special opacity-[0.85]' : isNeutralTab ? 'bg-shoulder-pattern-enjoy opacity-[0.15] grayscale' : 'bg-shoulder-pattern-enjoy opacity-[0.85]'}`}></div>
         <div className="pattern-overlay-dark opacity-30 pointer-events-none z-0"></div>
         
         <div className={`absolute inset-0 pointer-events-none z-0 overflow-hidden transition-opacity duration-1000 ${isSpecialTheme ? 'opacity-100' : 'opacity-0'}`}>
@@ -2405,7 +3543,7 @@ export default function App() {
               <ChevronDown className="w-3 h-3 text-slate-500 absolute right-0 pointer-events-none" />
             </div>
             <button
-              onClick={() => setIsClubModalOpen(true)}
+              onClick={() => openClubManager()}
               className="p-1 rounded-full bg-slate-100 hover:bg-blue-50 text-slate-600 hover:text-blue-600 transition-colors border border-slate-200/80"
               title="クラブの新規登録・編集"
             >
@@ -2477,10 +3615,10 @@ export default function App() {
                   setIsScreenshotMode(true);
                 }} 
                 className="relative group flex items-center gap-1 px-2.5 py-1.5 rounded-full transition-all active:scale-95 text-xs font-black text-slate-700 bg-white/60 shadow-[0_2px_8px_rgba(0,0,0,0.05)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-slate-300/50 hover:bg-white/80" 
-                title="画面いっぱいに中央表示（スクリーンショットモード）"
+                title="画面いっぱいに中央表示（全面表示）"
               >
-                <Camera className="w-3.5 h-3.5 relative z-10 text-blue-500 transition-transform group-hover:scale-110" strokeWidth={2.5} />
-                <span className="relative z-10 drop-shadow-md whitespace-nowrap tracking-wide">スクショ</span>
+                <Maximize2 className="w-3.5 h-3.5 relative z-10 text-blue-500 transition-transform group-hover:scale-110" strokeWidth={2.5} />
+                <span className="relative z-10 drop-shadow-md whitespace-nowrap tracking-wide">全面表示</span>
               </button>
               <button 
                 onClick={() => {
@@ -2494,7 +3632,7 @@ export default function App() {
                 <span className="relative z-10 drop-shadow-md whitespace-nowrap tracking-wide hidden sm:inline-block">画面ロック</span>
               </button>
               <button 
-                onClick={() => window.print()} 
+                onClick={() => { preparePrintLayout(); window.print(); }} 
                 className="relative group flex items-center gap-1 px-2.5 py-1.5 rounded-full transition-all active:scale-95 text-xs font-black text-slate-700 bg-white/60 shadow-[0_2px_8px_rgba(0,0,0,0.05)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.1)] border border-slate-300/50 hover:bg-white/80" 
                 title="紙やPDFに印刷"
               >
@@ -2570,18 +3708,51 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[120] p-3 sm:p-4 animate-in fade-in duration-200">
           <div className="glass-panel rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh] bg-white/95 border-slate-300/60">
             <div className="bg-white/80 px-4 py-3 border-b border-slate-300/60 flex justify-between items-center shrink-0 backdrop-blur-md">
-              <div className="flex items-center gap-1.5">
-                <Building2 className="w-5 h-5 text-blue-600" />
-                <h3 className="font-black text-slate-800 text-sm sm:text-base">クラブ登録・管理</h3>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <Building2 className="w-5 h-5 text-blue-600 shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="font-black text-slate-800 text-sm sm:text-base">クラブ管理</h3>
+                  <p className="text-[10px] font-bold text-slate-500 truncate">選択中：{currentClub.name}</p>
+                </div>
               </div>
-              <button onClick={() => setIsClubModalOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50 hover:bg-slate-200 transition-colors">
+              <button title="閉じる" onClick={() => setIsClubModalOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50 hover:bg-slate-200 transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
+            <div className="flex bg-slate-100/80 p-1 shrink-0 border-b border-slate-300/50" role="tablist">
+              {[
+                { id: 'clubs', label: 'クラブ', count: clubs.length },
+                { id: 'classes', label: '開講クラス', count: classes.length },
+                { id: 'competitions', label: '大会', count: competitions.length }
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  role="tab"
+                  aria-selected={clubManagerTab === tab.id}
+                  onClick={() => setClubManagerTab(tab.id)}
+                  className={`flex-1 py-1.5 text-[11px] sm:text-xs font-black rounded-lg transition-all flex items-center justify-center gap-1 ${clubManagerTab === tab.id ? 'bg-white text-blue-600 shadow-sm border border-slate-200' : 'text-slate-500 hover:bg-white/50 border border-transparent'}`}
+                >
+                  {tab.label}
+                  <span className={`text-[9px] px-1.5 rounded-full ${clubManagerTab === tab.id ? 'bg-blue-100 text-blue-700' : 'bg-slate-200 text-slate-500'}`}>{tab.count}</span>
+                </button>
+              ))}
+            </div>
+            {clubManagerTab !== 'clubs' && (
+              <div className="px-4 pt-2 text-[10px] font-black text-slate-500 shrink-0">「{currentClub.name}」の{clubManagerTab === 'classes' ? '開講クラス' : '大会'}を編集しています（クラブの切り替えは「クラブ」タブ）</div>
+            )}
+
+            {clubManagerTab === 'classes' && (
+              <div className="p-3 overflow-y-auto flex-1">{classEditorBody}</div>
+            )}
+            {clubManagerTab === 'competitions' && (
+              <div className="p-4 overflow-y-auto flex-1">{competitionEditorBody}</div>
+            )}
+
+            {clubManagerTab === 'clubs' && (
             <div className="p-4 overflow-y-auto space-y-4 flex-1">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider pl-1">新しいクラブを登録</label>
+              <div className="space-y-1.5 p-2.5 rounded-xl bg-white/80 border border-slate-200">
+                <label className="text-[10px] font-black text-slate-500 tracking-wider pl-1">新しいクラブを登録</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -2600,6 +3771,38 @@ export default function App() {
                   >
                     <Plus className="w-4 h-4" /> 登録
                   </button>
+                </div>
+
+                {/* 新しいクラブの開講クラス（任意・まとめて登録） */}
+                <div className="pt-1.5 space-y-1.5">
+                  <div className="text-[10px] font-black text-slate-500 pl-1 flex items-center gap-1"><Clock className="w-3 h-3 text-blue-500" /> このクラブの開講クラス（任意・あとからでも追加できます）</div>
+                  {newClubClasses.length > 0 && (
+                    <div className="space-y-1">
+                      {newClubClasses.map(c => (
+                        <div key={c.id} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-blue-50/70 border border-blue-200">
+                          <div className="flex-1 min-w-0 text-[10.5px] font-black text-slate-700 truncate">
+                            {classLabel(c)}<span className="font-bold text-slate-500 ml-1.5">{c.startTime}-{c.endTime}・{String(c.levelId).startsWith('special') ? 'スペシャル' : 'エンジョイ'}{levelNameOf(c.levelId)}</span>
+                          </div>
+                          <button title="このクラスを外す" onClick={() => setNewClubClasses(prev => prev.filter(x => x.id !== c.id))} className="p-1 rounded text-slate-400 hover:text-red-500">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {newClubClassDraft && (
+                    <div className="p-2 rounded-lg bg-slate-50/80 border border-dashed border-slate-300 space-y-1.5">
+                      {renderClassFields(newClubClassDraft, setNewClubClassDraft)}
+                      <div className="flex justify-end">
+                        <button onClick={addNewClubClass} className="px-2.5 py-1 rounded-lg text-[10.5px] font-black text-blue-600 bg-white border border-blue-300 hover:bg-blue-50 flex items-center gap-1">
+                          <Plus className="w-3.5 h-3.5" /> このクラスを追加
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {newClubClasses.length > 0 && (
+                    <div className="text-[10px] font-bold text-slate-500 pl-1">「登録」を押すと、クラブと{newClubClasses.length}件のクラスをまとめて登録します。</div>
+                  )}
                 </div>
               </div>
 
@@ -2655,8 +3858,8 @@ export default function App() {
                               <span className={`font-black text-xs truncate ${isSelected ? 'text-blue-700' : 'text-slate-800'}`}>
                                 {club.name}
                               </span>
-                              <span className="text-[10px] font-bold text-slate-500 bg-white/80 px-2 py-0.5 rounded-full border border-slate-200 shrink-0">
-                                {menuCount}件
+                              <span className="text-[9.5px] font-bold text-slate-500 bg-white/80 px-1.5 py-0.5 rounded-full border border-slate-200 shrink-0 whitespace-nowrap">
+                                クラス{isSelected ? classes.length : (clubProfiles[club.id]?.classes || []).length}・大会{isSelected ? competitions.length : (clubProfiles[club.id]?.competitions || []).length}・メニュー{menuCount}
                               </span>
                             </button>
                             <div className="flex items-center gap-1 shrink-0">
@@ -2688,18 +3891,9 @@ export default function App() {
                 </div>
               </div>
             </div>
+            )}
 
-            <div className="p-3 bg-white/80 border-t border-slate-300/60 flex justify-between items-center shrink-0 backdrop-blur-md">
-              <button
-                onClick={() => {
-                  setIsClubModalOpen(false);
-                  setIsCompetitionModalOpen(true);
-                }}
-                className="flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-black text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-all active:scale-95"
-              >
-                <Trophy className="w-3.5 h-3.5 text-amber-600" />
-                <span>{currentClub.name}の大会登録 ({competitions.length}/{MAX_COMPETITIONS})</span>
-              </button>
+            <div className="p-3 bg-white/80 border-t border-slate-300/60 flex justify-end items-center shrink-0 backdrop-blur-md">
               <button
                 onClick={() => setIsClubModalOpen(false)}
                 className="px-6 py-2 rounded-xl text-xs font-black text-white bg-blue-500 hover:bg-blue-600 shadow-sm transition-all active:scale-95"
@@ -2712,6 +3906,26 @@ export default function App() {
       )}
 
       {/* --- クラブ別 大会登録・管理モーダル（最大8大会） --- */}
+      {isClassModalOpen && classDraft && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[110] p-3 animate-in fade-in duration-200">
+          <div className="glass-panel rounded-[1.5rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[88vh] bg-white/95 border-slate-300/60">
+            <div className="bg-white/80 px-4 py-3 border-b border-slate-300/60 flex justify-between items-center shrink-0">
+              <h3 className="font-black text-slate-800 text-sm flex items-center gap-1.5"><Clock className="w-4 h-4 text-blue-600" /> {currentClub.name}の開講クラス</h3>
+              <button title="閉じる" onClick={() => setIsClassModalOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-3 space-y-3 overflow-y-auto">
+              {classEditorBody}
+            </div>
+
+            <div className="p-2.5 bg-white/60 border-t border-slate-300/60 flex justify-end shrink-0">
+              <button onClick={() => setIsClassModalOpen(false)} className="px-6 py-2 rounded-xl text-xs font-black text-white bg-blue-500 hover:bg-blue-600 shadow-sm active:scale-95">閉じる</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isCompetitionModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md flex items-center justify-center z-[125] p-3 sm:p-4 animate-in fade-in duration-200">
           <div className="glass-panel rounded-[2rem] w-full max-w-md shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[85vh] bg-white/95 border-slate-300/60">
@@ -2723,222 +3937,13 @@ export default function App() {
                   <p className="text-[10px] font-bold text-slate-500 truncate">対象クラブ: {currentClub.name}（最大{MAX_COMPETITIONS}大会）</p>
                 </div>
               </div>
-              <button onClick={() => setIsCompetitionModalOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50 hover:bg-slate-200 transition-colors shrink-0">
+              <button title="閉じる" onClick={() => setIsCompetitionModalOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50 hover:bg-slate-200 transition-colors shrink-0">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="p-4 overflow-y-auto space-y-4 flex-1">
-              <div className="flex items-center justify-between bg-amber-50/80 border border-amber-200/80 rounded-xl p-2.5">
-                <div className="text-[11px] font-bold text-amber-900 leading-snug">
-                  登録した大会のうち、練習日（表示日）から最も近い大会名と残り日数がメニュー表示画面に自動表示されます。
-                </div>
-                <label className="flex items-center gap-1.5 shrink-0 ml-2 cursor-pointer select-none bg-white px-2.5 py-1.5 rounded-lg border border-amber-200 shadow-sm">
-                  <input
-                    type="checkbox"
-                    checked={showCompetitionOnPrint}
-                    onChange={(e) => setShowCompetitionOnPrint(e.target.checked)}
-                    className="accent-amber-500 w-3.5 h-3.5 cursor-pointer"
-                  />
-                  <span className="text-[10px] font-black text-slate-700">メニュー表示</span>
-                </label>
-              </div>
-
-              {/* 新規大会追加フォーム */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between px-1">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">新しい大会を追加</label>
-                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${competitions.length >= MAX_COMPETITIONS ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-600'}`}>
-                    登録数: {competitions.length} / {MAX_COMPETITIONS}
-                  </span>
-                </div>
-
-                {competitions.length >= MAX_COMPETITIONS ? (
-                  <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-600 text-center">
-                    最大{MAX_COMPETITIONS}大会まで登録済みです。新しく追加する場合は既存の大会を削除してください。
-                  </div>
-                ) : (
-                  <div className="space-y-2 glass-panel p-2.5 rounded-xl border-slate-200/80">
-                    <input
-                      type="text"
-                      value={newCompName}
-                      onChange={(e) => setNewCompName(e.target.value)}
-                      onCompositionStart={handleCompositionStart}
-                      onCompositionEnd={handleCompositionEnd}
-                      onKeyDown={(e) => { if (isEnterWithoutIme(e)) handleAddCompetition(); }}
-                      placeholder="大会名（例：ジャパンマスターズ）"
-                      className="w-full p-2 rounded-xl glass-input text-slate-800 font-bold text-xs focus:ring-2 focus:ring-amber-400 outline-none border-slate-300/80"
-                    />
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[10px] font-black text-slate-500 pl-1 shrink-0">開催期間:</span>
-                      <input
-                        type="date"
-                        value={newCompStartDate}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setNewCompStartDate(val);
-                          if (!newCompEndDate || newCompEndDate < val) {
-                            setNewCompEndDate(val);
-                          }
-                        }}
-                        className="flex-1 min-w-[115px] p-1.5 rounded-xl glass-input text-slate-800 font-bold text-[11px] focus:ring-2 focus:ring-amber-400 outline-none border-slate-300/80"
-                      />
-                      <span className="text-xs font-black text-slate-400">〜</span>
-                      <input
-                        type="date"
-                        value={newCompEndDate}
-                        min={newCompStartDate}
-                        onChange={(e) => setNewCompEndDate(e.target.value)}
-                        className="flex-1 min-w-[115px] p-1.5 rounded-xl glass-input text-slate-800 font-bold text-[11px] focus:ring-2 focus:ring-amber-400 outline-none border-slate-300/80"
-                      />
-                      <button
-                        onClick={handleAddCompetition}
-                        disabled={!newCompName.trim() || !newCompStartDate}
-                        className="w-full sm:w-auto px-3.5 py-2 rounded-xl text-xs font-black text-white bg-amber-500 hover:bg-amber-600 disabled:opacity-40 shadow-sm transition-all active:scale-95 shrink-0 flex items-center justify-center gap-1"
-                      >
-                        <Plus className="w-4 h-4" /> 追加
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* 登録済み大会一覧 */}
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider pl-1">
-                  {currentClub.name} の登録大会一覧
-                </label>
-
-                {competitions.length === 0 ? (
-                  <div className="text-center p-6 rounded-2xl bg-slate-50/80 border border-dashed border-slate-300 text-slate-400 space-y-1">
-                    <Trophy className="w-7 h-7 mx-auto opacity-40 text-amber-500" />
-                    <p className="text-xs font-black">まだ大会が登録されていません</p>
-                    <p className="text-[10px] font-bold">上のフォームから最大{MAX_COMPETITIONS}件まで大会を登録できます</p>
-                  </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    {competitions.map(comp => {
-                      const days = getCompetitionDaysUntil(comp, printDate);
-                      const isNearest = nearestCompetition?.id === comp.id;
-                      const isEditing = editingCompId === comp.id;
-
-                      return (
-                        <div
-                          key={comp.id}
-                          className={`p-2.5 rounded-xl border transition-all ${
-                            isNearest
-                              ? 'bg-amber-50/90 border-amber-400 shadow-sm'
-                              : 'glass-panel border-slate-200/80'
-                          }`}
-                        >
-                          {isEditing ? (
-                            <div className="space-y-2">
-                              <input
-                                type="text"
-                                value={editingCompName}
-                                onChange={(e) => setEditingCompName(e.target.value)}
-                                onCompositionStart={handleCompositionStart}
-                                onCompositionEnd={handleCompositionEnd}
-                                onKeyDown={(e) => { if (isEnterWithoutIme(e)) handleSaveCompetitionEdit(comp.id); }}
-                                className="w-full px-2.5 py-1.5 rounded-lg bg-white border border-amber-400 text-xs font-black text-slate-800 outline-none"
-                                placeholder="大会名"
-                                autoFocus
-                              />
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <span className="text-[10px] font-black text-slate-500">期間:</span>
-                                <input
-                                  type="date"
-                                  value={editingCompStartDate}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setEditingCompStartDate(val);
-                                    if (!editingCompEndDate || editingCompEndDate < val) {
-                                      setEditingCompEndDate(val);
-                                    }
-                                  }}
-                                  className="flex-1 min-w-[110px] px-2 py-1 rounded-lg bg-white border border-amber-400 text-[11px] font-black text-slate-800 outline-none"
-                                />
-                                <span className="text-xs font-black text-slate-400">〜</span>
-                                <input
-                                  type="date"
-                                  value={editingCompEndDate}
-                                  min={editingCompStartDate}
-                                  onChange={(e) => setEditingCompEndDate(e.target.value)}
-                                  className="flex-1 min-w-[110px] px-2 py-1 rounded-lg bg-white border border-amber-400 text-[11px] font-black text-slate-800 outline-none"
-                                />
-                              </div>
-                              <div className="flex justify-end gap-1.5">
-                                <button
-                                  onClick={() => handleSaveCompetitionEdit(comp.id)}
-                                  className="px-3 py-1 rounded-lg bg-amber-500 text-white text-[10px] font-black"
-                                >
-                                  保存
-                                </button>
-                                <button
-                                  onClick={() => setEditingCompId(null)}
-                                  className="px-2.5 py-1 rounded-lg bg-slate-200 text-slate-600 text-[10px] font-black"
-                                >
-                                  取消
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  {isNearest && (
-                                    <span className="text-[9px] font-black bg-amber-500 text-white px-1.5 py-0.5 rounded shadow-sm shrink-0">
-                                      直近大会
-                                    </span>
-                                  )}
-                                  <span className="font-black text-xs text-slate-800 truncate">{comp.name}</span>
-                                </div>
-                                <div className="flex items-center gap-2 mt-0.5 text-[10px] font-bold text-slate-500 flex-wrap">
-                                  <span>📅 {formatCompetitionPeriod(comp, true)}</span>
-                                  {days !== null && (
-                                    <span className={`font-black px-1.5 py-0.2 rounded ${
-                                      days === 0
-                                        ? 'bg-rose-100 text-rose-600'
-                                        : days > 0
-                                          ? 'bg-amber-100/80 text-amber-800'
-                                          : 'bg-slate-200 text-slate-500'
-                                    }`}>
-                                      {days === 0 ? '本日開催！' : days > 0 ? `あと${days}日` : `${Math.abs(days)}日前`}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-1 shrink-0">
-                                <button
-                                  onClick={() => {
-                                    const sDate = comp.startDate || comp.date || getTodayDateStr();
-                                    const eDate = comp.endDate || sDate;
-                                    setEditingCompId(comp.id);
-                                    setEditingCompName(comp.name);
-                                    setEditingCompStartDate(sDate);
-                                    setEditingCompEndDate(eDate);
-                                  }}
-                                  className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-white/80 transition-colors"
-                                  title="大会を編集"
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteCompetition(comp.id)}
-                                  className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-white/80 transition-colors"
-                                  title="大会を削除"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              {competitionEditorBody}
             </div>
 
             <div className="p-3 bg-white/80 border-t border-slate-300/60 flex justify-end shrink-0 backdrop-blur-md">
@@ -2962,7 +3967,7 @@ export default function App() {
                 <HelpCircle className="w-5 h-5 text-blue-600" />
                 <h3 className="font-black text-slate-800 text-sm sm:text-base">ガイド & 各種設定</h3>
               </div>
-              <button onClick={() => setIsHelpOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50 hover:bg-slate-200 transition-colors">
+              <button title="閉じる" onClick={() => setIsHelpOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50 hover:bg-slate-200 transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -3003,9 +4008,9 @@ export default function App() {
                     </p>
                   </div>
                   <div className="glass-panel p-3 rounded-xl border-slate-200/80 space-y-1">
-                    <div className="font-black text-blue-600 text-xs">3. メニュー表示・スクショ・画面ロック</div>
+                    <div className="font-black text-blue-600 text-xs">3. メニュー表示・全面表示・画面ロック</div>
                     <p className="text-[11px] font-bold text-slate-600">
-                      「メニュー表示」タブでは、直近大会のカウントダウン表示や日英中3ヶ国語の切り替え、フォント変更、画面中央に余白なしで最大表示する「スクショ」モード、水滴や誤タップを防ぐ「画面ロック」が使えます。
+                      「メニュー表示」タブでは、直近大会のカウントダウン表示や日英中3ヶ国語の切り替え、フォント変更、画面中央に余白なしで最大表示する「全面表示」、水滴や誤タップを防ぐ「画面ロック」が使えます。
                     </p>
                   </div>
                 </div>
@@ -3030,52 +4035,169 @@ export default function App() {
                       <input type="file" accept=".json" onChange={importAppData} className="hidden" />
                     </label>
                   </div>
-                </div>
-              )}
 
-              {helpTab === 'api' && (
-                <div className="space-y-3">
-                  <div className="text-[11px] font-bold text-slate-600 bg-fuchsia-50/70 p-2.5 rounded-xl border border-fuchsia-100">
-                    「Normalモード」および「内蔵辞書による多言語翻訳」はAPIキー不要でどなたでも無料でご利用いただけます。AI生成（AI Mode）や高精度AI翻訳を利用したい場合は、ご自身のGoogle Gemini APIキーを設定してください（お使いのブラウザ内にのみ保存されます）。
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1 pl-1">
-                      <Key className="w-3.5 h-3.5 text-fuchsia-500" /> Gemini API Key
-                    </label>
-                    <input
-                      type="password"
-                      value={userApiKey}
-                      onChange={(e) => setUserApiKey(e.target.value)}
-                      placeholder="AIzaSy..."
-                      autoComplete="off"
-                      className="w-full p-2.5 rounded-xl glass-input text-slate-800 font-mono text-xs focus:ring-2 focus:ring-fuchsia-400 outline-none border-slate-300/80"
-                    />
-                  </div>
-                  <div className="text-[11px] font-bold text-slate-600 bg-white/70 p-2.5 rounded-xl border border-slate-200 space-y-1">
-                    <div>APIキーは Google AI Studio で無料で発行できます：</div>
-                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline break-all">https://aistudio.google.com/apikey</a>
-                    <div className="text-slate-500">※ 共用の端末では入力しないでください。キーはこの端末のブラウザにだけ保存され、Google以外には送信されません。</div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center gap-1 pl-1">
-                      <Sparkles className="w-3.5 h-3.5 text-fuchsia-500" /> 使用モデル（通常は空欄でOK）
-                    </label>
-                    <input
-                      type="text"
-                      value={geminiModel}
-                      onChange={(e) => setGeminiModel(e.target.value)}
-                      placeholder={GEMINI_DEFAULT_MODEL}
-                      autoComplete="off"
-                      autoCapitalize="off"
-                      spellCheck={false}
-                      className="w-full p-2.5 rounded-xl glass-input text-slate-800 font-mono text-xs focus:ring-2 focus:ring-fuchsia-400 outline-none border-slate-300/80"
-                    />
-                    <div className="text-[10px] font-bold text-slate-500 pl-1">
-                      空欄なら常に最新のFlashモデルを使い、上限に達したときは自動で {GEMINI_FALLBACK_MODEL} に切り替えます。
+                  {/* テキストで引き継ぎ（LINE・メールに貼れる） */}
+                  <div className="p-2.5 rounded-xl bg-white/70 border border-slate-200 space-y-2">
+                    <div className="text-[11px] font-black text-slate-700 flex items-center gap-1"><Copy className="w-3.5 h-3.5 text-blue-500" /> テキストで引き継ぐ（LINE・メールで送れます）</div>
+
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-black text-slate-500">① いまの端末で：テキストにしてコピー</div>
+                      <div className="flex gap-1.5">
+                        <button onClick={handleCopyTransferText} className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-black text-[11px] text-white bg-blue-500 hover:bg-blue-600 shadow-sm active:scale-95">
+                          <Copy className="w-3.5 h-3.5" /> テキストをコピー
+                        </button>
+                        {typeof navigator !== 'undefined' && navigator.share && (
+                          <button onClick={handleShareTransferText} className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-black text-[11px] text-blue-600 bg-white border border-blue-300 hover:bg-blue-50 active:scale-95">
+                            <Upload className="w-3.5 h-3.5" /> LINEなどで送る
+                          </button>
+                        )}
+                      </div>
+                      {transferText && (
+                        <div className="space-y-1">
+                          <textarea readOnly value={transferText} onFocus={(e) => e.target.select()} aria-label="引き継ぎ用テキスト" className="w-full h-16 p-2 rounded-lg bg-slate-50 border border-slate-200 font-mono text-[9px] text-slate-600 break-all outline-none" />
+                          <div className={`text-[10px] font-bold ${transferText.length > 9000 ? 'text-amber-600' : 'text-slate-500'}`}>
+                            {transferText.length.toLocaleString()}文字{transferText.length > 9000 ? '：LINEでは1回に送れない長さです。メールやメモで送ってください。' : '：コピー済み。新しい端末へ送ってください。'}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5 pt-1.5 border-t border-slate-200">
+                      <div className="text-[10px] font-black text-slate-500">② 新しい端末で：受け取ったテキストを貼り付けて読み込む</div>
+                      <textarea
+                        value={transferInput}
+                        onChange={(e) => { setTransferInput(e.target.value); setTransferPreview(null); setTransferError(''); }}
+                        placeholder="MSM1: から始まるテキストを貼り付け"
+                        aria-label="受け取ったテキスト"
+                        className="w-full h-16 p-2 rounded-lg bg-white border border-slate-300 font-mono text-[10px] text-slate-700 outline-none focus:ring-2 focus:ring-blue-300"
+                      />
+                      <div className="flex gap-1.5">
+                        <button onClick={handlePasteFromClipboard} className="flex-1 py-2 rounded-lg font-black text-[11px] text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 active:scale-95">
+                          コピーした内容を貼り付け
+                        </button>
+                        <button onClick={() => handlePreviewTransfer(transferInput)} disabled={!transferInput.trim()} className="flex-1 py-2 rounded-lg font-black text-[11px] text-white bg-emerald-500 hover:bg-emerald-600 disabled:opacity-40 shadow-sm active:scale-95">
+                          内容を確認
+                        </button>
+                      </div>
+                      {transferError && <div role="alert" className="text-[10px] font-bold text-red-500">{transferError}</div>}
+                      {transferPreview && (
+                        <div className="p-2 rounded-lg bg-emerald-50 border border-emerald-300 space-y-1.5">
+                          <div className="text-[10.5px] font-black text-emerald-800">読み込む内容{transferPreview.summary.exportedAt && `（${transferPreview.summary.exportedAt} 書き出し）`}</div>
+                          <ul className="text-[10px] font-bold text-slate-700 space-y-0.5 pl-1">
+                            <li>クラブ：{transferPreview.summary.clubs.join('、') || 'なし'}</li>
+                            <li>開講クラス：{transferPreview.summary.classes}件　大会：{transferPreview.summary.competitions}件　保存メニュー：{transferPreview.summary.saved}件</li>
+                          </ul>
+                          <div className="text-[10px] font-bold text-amber-700">※ 読み込むと、この端末のクラブ・設定・保存メニューは上の内容に置き換わります（APIキーはそのまま残ります）。</div>
+                          <button onClick={confirmTransferImport} className="w-full py-2 rounded-lg font-black text-[11px] text-white bg-emerald-600 hover:bg-emerald-700 shadow-sm active:scale-95">
+                            この内容で読み込む
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
               )}
+
+              {helpTab === 'api' && (() => {
+                const prov = getAiProvider(aiProvider);
+                const inputCls = "w-full p-2.5 rounded-xl glass-input text-slate-800 font-mono text-xs focus:ring-2 focus:ring-fuchsia-400 outline-none border-slate-300/80";
+                const labelCls = "text-[10px] font-black text-slate-500 tracking-wider flex items-center gap-1 pl-1";
+                return (
+                <div className="space-y-3">
+                  <div className="text-[11px] font-bold text-slate-600 bg-fuchsia-50/70 p-2.5 rounded-xl border border-fuchsia-100">
+                    「Normalモード」と「内蔵辞書による多言語翻訳」は、APIキーなしでどなたでも無料で使えます。AIによるメニュー生成（AI Mode）や高精度なAI翻訳は、ご自身でAPIキーを登録した方だけが使えます。使うAIを選び、そのAIのキーを入力してください。
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className={labelCls}><Sparkles className="w-3.5 h-3.5 text-fuchsia-500" /> 使うAI</div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {AI_PROVIDERS.map(p => {
+                        const registered = Boolean((apiKeys[p.id] || '').trim());
+                        const active = aiProvider === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => { setAiProvider(p.id); setAiTestState(null); }}
+                            aria-pressed={active}
+                            className={`flex items-center justify-between gap-1 px-2.5 py-2 rounded-xl border text-left transition-all ${active ? 'bg-fuchsia-50 border-fuchsia-400 shadow-sm' : 'bg-white/70 border-slate-300/70 hover:bg-white'}`}
+                          >
+                            <span className={`text-[11px] font-black leading-tight ${active ? 'text-fuchsia-700' : 'text-slate-700'}`}>{p.name}</span>
+                            {registered && <span className="shrink-0 text-[9px] font-black text-emerald-600 bg-emerald-50 border border-emerald-200 rounded px-1">登録済</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5 p-2.5 rounded-xl bg-white/60 border border-slate-200">
+                    <div className="space-y-1">
+                      <label className={labelCls}><Key className="w-3.5 h-3.5 text-fuchsia-500" /> {prov.short} の APIキー</label>
+                      <input
+                        type="password"
+                        value={apiKeys[aiProvider] || ''}
+                        onChange={(e) => { const v = e.target.value; setApiKeys(prev => ({ ...prev, [aiProvider]: v })); setAiTestState(null); }}
+                        placeholder={prov.placeholder}
+                        autoComplete="off"
+                        className={inputCls}
+                      />
+                    </div>
+
+                    {aiProvider === 'azure' && (
+                      <div className="space-y-1">
+                        <label className={labelCls}>エンドポイント</label>
+                        <input
+                          type="url"
+                          value={azureEndpoint}
+                          onChange={(e) => { setAzureEndpoint(e.target.value); setAiTestState(null); }}
+                          placeholder="https://（リソース名）.openai.azure.com/"
+                          autoComplete="off" autoCapitalize="off" spellCheck={false}
+                          className={inputCls}
+                        />
+                      </div>
+                    )}
+
+                    <div className="space-y-1">
+                      <label className={labelCls}>{aiProvider === 'azure' ? 'デプロイ名（必須）' : '使用モデル（通常は空欄でOK）'}</label>
+                      <input
+                        type="text"
+                        value={aiModels[aiProvider] || ''}
+                        onChange={(e) => { const v = e.target.value; setAiModels(prev => ({ ...prev, [aiProvider]: v })); setAiTestState(null); }}
+                        placeholder={aiProvider === 'azure' ? '例：gpt-mini-deploy' : prov.defaultModel}
+                        autoComplete="off" autoCapitalize="off" spellCheck={false}
+                        className={inputCls}
+                      />
+                      <div className="text-[10px] font-bold text-slate-500 pl-1">
+                        {aiProvider === 'gemini' && `空欄なら常に最新のFlashモデルを使い、上限に達したときは自動で ${GEMINI_FALLBACK_MODEL} に切り替えます。`}
+                        {aiProvider === 'openai' && `空欄なら ${prov.defaultModel}（速くて安価なモデル）を使います。`}
+                        {aiProvider === 'anthropic' && `空欄なら ${prov.defaultModel}（速くて安価なモデル）を使います。`}
+                        {aiProvider === 'azure' && 'Azure上でモデルをデプロイしたときに付けた名前を入力します。'}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={runAiConnectionTest}
+                        disabled={aiTestState?.status === 'testing'}
+                        className="shrink-0 px-3 py-2 rounded-lg text-[11px] font-black text-white bg-fuchsia-500 hover:bg-fuchsia-600 disabled:opacity-60 shadow-sm active:scale-95"
+                      >
+                        {aiTestState?.status === 'testing' ? '確認中…' : '接続テスト'}
+                      </button>
+                      {aiTestState && (
+                        <div role="status" className={`text-[10px] font-bold leading-snug ${aiTestState.status === 'ok' ? 'text-emerald-600' : aiTestState.status === 'error' ? 'text-red-500' : 'text-slate-500'}`}>
+                          {aiTestState.status === 'ok' ? '✓ ' : aiTestState.status === 'error' ? '✕ ' : ''}{aiTestState.message}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="text-[11px] font-bold text-slate-600 bg-white/70 p-2.5 rounded-xl border border-slate-200 space-y-1">
+                    <div>{prov.keyNote}</div>
+                    <a href={prov.keyUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline break-all">{prov.keyUrl}</a>
+                    <div className="text-slate-500">※ 共用の端末では入力しないでください。キーはこの端末のブラウザにだけ保存され、選んだAIの提供元以外には送信されません。バックアップの書き出しにも含まれません。</div>
+                  </div>
+                </div>
+                );
+              })()}
             </div>
 
             <div className="p-3 bg-white/80 border-t border-slate-300/60 flex justify-end shrink-0 backdrop-blur-md">
@@ -3099,7 +4221,7 @@ export default function App() {
                 <SlidersHorizontal className="w-4 h-4 text-blue-600" />
                 <h3 className="font-black text-slate-800 text-sm sm:text-base">生成ロジック設定 ({currentClub.name})</h3>
               </div>
-              <button onClick={() => setIsLogicSettingsOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50 hover:bg-slate-200 transition-colors">
+              <button title="閉じる" onClick={() => setIsLogicSettingsOpen(false)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50 hover:bg-slate-200 transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -3110,7 +4232,8 @@ export default function App() {
                 { id: 'menuDist', name: '生成距離' },
                 { id: 'distance', name: '推定距離' },
                 { id: 'ratio', name: '割合' },
-                { id: 'period', name: '期別' }
+                { id: 'period', name: '期別' },
+                { id: 'patterns', name: 'パターン' }
               ].map(tab => (
                 <button
                   key={tab.id}
@@ -3172,7 +4295,7 @@ export default function App() {
               {activeLogicTab === 'menuDist' && (
                 <div className="space-y-4">
                   <div className="text-[11px] font-bold text-slate-500 bg-blue-50/70 p-2 rounded-lg border border-blue-100">
-                    メニュー生成時に使われる各パートの「1本あたりの基準距離(m)」や「最大距離上限」「Downの最低距離」をカテゴリ別に設定します（5m単位）。
+                    メニュー生成時に使われる各パートの「1本あたりの基準距離」や「最大距離上限」を 25 / 50 / 100 / 200m から選びます。「Downの最低総距離」は25m単位で設定します。
                   </div>
                   {['enjoy', 'special'].map(cat => {
                     const distCfg = tempSettings.menuDistances?.[cat] || DEFAULT_LOGIC_SETTINGS.menuDistances[cat];
@@ -3212,14 +4335,26 @@ export default function App() {
                             <div key={item.key} className="flex flex-col gap-1">
                               <span className="text-[9.5px] text-slate-500 font-bold truncate" title={item.label}>{item.label}</span>
                               <div className="flex items-center glass-input px-1.5 py-1 rounded-lg bg-white/60 border-slate-200">
-                                <input
-                                  type="number"
-                                  step="5"
-                                  min="5"
-                                  value={distCfg[item.key] ?? 25}
-                                  onChange={(e) => updateMenuDist(item.key, e.target.value)}
-                                  className="w-full text-right bg-transparent text-xs font-black text-slate-800 outline-none"
-                                />
+                                {item.key === 'minDownTotal' ? (
+                                  <input
+                                    type="number"
+                                    step="25"
+                                    min="25"
+                                    value={distCfg[item.key] ?? 50}
+                                    onChange={(e) => updateMenuDist(item.key, e.target.value)}
+                                    onBlur={(e) => updateMenuDist(item.key, Math.max(25, roundTo25(e.target.value)))}
+                                    className="w-full text-right bg-transparent text-xs font-black text-slate-800 outline-none"
+                                  />
+                                ) : (
+                                  // 1本の距離は 25 / 50 / 100 / 200m から選ぶ
+                                  <select
+                                    value={snapRepDistance(distCfg[item.key] ?? 25)}
+                                    onChange={(e) => updateMenuDist(item.key, e.target.value)}
+                                    className="w-full text-right bg-transparent text-xs font-black text-slate-800 outline-none cursor-pointer appearance-none"
+                                  >
+                                    {REP_DISTANCES.map(d => <option key={d} value={d}>{d}</option>)}
+                                  </select>
+                                )}
                                 <span className="text-[9px] text-slate-400 font-bold ml-0.5">m</span>
                               </div>
                             </div>
@@ -3335,6 +4470,76 @@ export default function App() {
                 </div>
               )}
 
+              {activeLogicTab === 'patterns' && (() => {
+                const list = (tempSettings.setPatterns?.[patternGroup]) ?? DEFAULT_SET_PATTERNS[patternGroup] ?? [];
+                const updateList = (updater) => setTempSettings(prev => {
+                  const current = prev.setPatterns?.[patternGroup] ?? DEFAULT_SET_PATTERNS[patternGroup] ?? [];
+                  return { ...prev, setPatterns: { ...(prev.setPatterns || DEFAULT_SET_PATTERNS), [patternGroup]: updater(current) } };
+                });
+                return (
+                  <div className="space-y-3">
+                    <div className="text-[11px] font-bold text-slate-500 bg-blue-50/70 p-2 rounded-lg border border-blue-100">
+                      パートごとに「種目 / 詳細」の組み合わせを複数登録できます。自動生成ではこの中からランダムに選ばれ、メニュー画面の各行でも候補として選べます。Mainは目的ごとに登録します。
+                    </div>
+                    <div className="flex gap-1 overflow-x-auto hide-scrollbar pb-0.5">
+                      {PATTERN_GROUPS.map(g => (
+                        <button
+                          key={g.key}
+                          onClick={() => setPatternGroup(g.key)}
+                          className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] font-black border transition-all ${patternGroup === g.key ? 'bg-blue-500 text-white border-blue-400 shadow-sm' : 'bg-white/70 text-slate-600 border-slate-300/70'}`}
+                        >
+                          {g.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="glass-panel p-2.5 rounded-xl border-slate-200/60 space-y-1.5">
+                      {list.length === 0 && (
+                        <div className="text-[11px] font-bold text-slate-400 text-center py-2">パターンがありません（空のときは初期パターンが使われます）</div>
+                      )}
+                      {list.map((pt, i) => (
+                        <div key={i} className="flex items-center gap-1.5">
+                          <select
+                            value={pt.style}
+                            onChange={(e) => updateList(cur => cur.map((x, j) => j === i ? { ...x, style: e.target.value } : x))}
+                            className="glass-input bg-white/80 rounded-lg px-1.5 py-1.5 text-[11px] font-black text-blue-600 outline-none border-slate-300/70 w-[74px] shrink-0"
+                          >
+                            {STYLES.map(st => <option key={st} value={st}>{st}</option>)}
+                          </select>
+                          <input
+                            type="text"
+                            value={pt.description}
+                            onChange={(e) => updateList(cur => cur.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
+                            placeholder="詳細（例：板キック / 姿勢を意識）"
+                            className="flex-1 min-w-0 glass-input bg-white/80 rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-800 outline-none border-slate-300/70"
+                          />
+                          <button
+                            onClick={() => updateList(cur => cur.filter((_, j) => j !== i))}
+                            className="glass-btn w-7 h-7 shrink-0 flex items-center justify-center rounded-lg text-slate-400 hover:text-red-500 border-slate-300/50"
+                            title="このパターンを削除"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      <div className="flex items-center justify-between pt-1">
+                        <button
+                          onClick={() => updateList(cur => [...cur, { style: 'Choice', description: '' }])}
+                          className="glass-btn px-2.5 py-1.5 rounded-lg text-[11px] font-black text-blue-600 border-slate-300/50 flex items-center gap-1"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> パターンを追加
+                        </button>
+                        <button
+                          onClick={() => updateList(() => JSON.parse(JSON.stringify(DEFAULT_SET_PATTERNS[patternGroup] || [])))}
+                          className="text-[10px] font-bold text-slate-400 hover:text-slate-600 flex items-center gap-0.5"
+                        >
+                          <RotateCcw className="w-3 h-3" /> このパートを初期値に戻す
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               {activeLogicTab === 'period' && (
                 <div className="space-y-4">
                   <div className="text-[11px] font-bold text-slate-500 bg-blue-50/70 p-2 rounded-lg border border-blue-100">
@@ -3410,7 +4615,7 @@ export default function App() {
         className={`flex-1 relative transition-all duration-300 ${
           isScreenshotMode 
             ? 'fixed inset-0 z-[150] flex items-center justify-center overflow-hidden p-0 m-0 bg-slate-100 select-none cursor-pointer' 
-            : 'overflow-y-auto pb-24 pt-1 md:pt-2'
+            : 'overflow-y-auto pb-[calc(6rem+env(safe-area-inset-bottom))] pt-1 md:pt-2'
         }`}
         onClick={() => {
           if (isScreenshotMode) {
@@ -3438,19 +4643,60 @@ export default function App() {
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <button
-                      onClick={() => setIsCompetitionModalOpen(true)}
-                      className="flex items-center gap-1 text-[10px] font-black text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-2 py-1 rounded-lg border border-amber-300/80 transition-colors shadow-sm"
+                      onClick={() => openClubManager()}
+                      title="クラブ・開講クラス・大会をまとめて管理"
+                      className="flex items-center gap-1 text-[10.5px] font-black text-white bg-blue-500 hover:bg-blue-600 px-2.5 py-1 rounded-lg shadow-sm transition-colors"
                     >
-                      <Trophy className="w-3 h-3 text-amber-600" />
-                      <span>大会登録・編集 ({competitions.length}/{MAX_COMPETITIONS})</span>
-                    </button>
-                    <button
-                      onClick={() => setIsClubModalOpen(true)}
-                      className="text-[10px] font-black text-blue-600 hover:text-blue-700 bg-blue-50/80 hover:bg-blue-100/80 px-2 py-1 rounded-lg border border-blue-200/80 transition-colors"
-                    >
+                      <Settings className="w-3.5 h-3.5" />
                       クラブ管理
                     </button>
                   </div>
+                </div>
+
+                {/* 開講クラス（タップでカテゴリ・レベル・レッスン時間を切り替え） */}
+                <div className="border-t border-slate-200/80 pt-2">
+                  <div className="flex items-center justify-between mb-1.5 px-0.5">
+                    <span className="text-[10px] font-black text-slate-500 flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-blue-500" />
+                      開講クラス（タップで切り替え）
+                    </span>
+
+                  </div>
+                  {classes.length === 0 ? (
+                    <div
+                      onClick={() => openClubManager('classes')}
+                      className="text-[10px] font-bold text-slate-400 bg-slate-50/70 hover:bg-blue-50/50 border border-dashed border-slate-300 rounded-lg py-2 px-3 text-center cursor-pointer transition-colors"
+                    >
+                      開講クラスが登録されていません（タップして登録）
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                      {classes.map(c => {
+                        const active = isClassActive(c);
+                        const isSp = (c.levelCategory || '').startsWith('special') || String(c.levelId).startsWith('special');
+                        return (
+                          <button
+                            key={c.id}
+                            onClick={() => applyClass(c)}
+                            aria-pressed={active}
+                            className={`flex flex-col items-start gap-0.5 px-2 py-1.5 rounded-lg border text-left transition-all active:scale-95 ${
+                              active
+                                ? (isSp ? 'bg-rose-50 border-rose-400 shadow-sm ring-1 ring-rose-300' : 'bg-blue-50 border-blue-400 shadow-sm ring-1 ring-blue-300')
+                                : 'bg-white/80 border-slate-200/90 hover:bg-white'
+                            }`}
+                          >
+                            <span className="text-[11px] font-black text-slate-800 truncate w-full">{classLabel(c)}</span>
+                            <span className="flex items-center gap-1 w-full">
+                              <span className="text-[9px] font-bold text-slate-500 whitespace-nowrap">{c.startTime}-{c.endTime}</span>
+                              <span className={`text-[8.5px] font-black px-1 rounded border whitespace-nowrap ${isSp ? 'text-rose-600 border-rose-200 bg-rose-50' : 'text-blue-600 border-blue-200 bg-blue-50'}`}>
+                                {isSp ? 'スペシャル' : 'エンジョイ'}{levelNameOf(c.levelId)}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* 登録大会一覧 */}
@@ -3467,7 +4713,7 @@ export default function App() {
 
                   {competitions.length === 0 ? (
                     <div
-                      onClick={() => setIsCompetitionModalOpen(true)}
+                      onClick={() => openClubManager('competitions')}
                       className="text-[10px] font-bold text-slate-400 bg-slate-50/70 hover:bg-amber-50/50 border border-dashed border-slate-300 rounded-lg py-2 px-3 text-center cursor-pointer transition-colors"
                     >
                       登録された大会はありません（タップして最大{MAX_COMPETITIONS}大会まで登録可能）
@@ -3480,7 +4726,7 @@ export default function App() {
                         return (
                           <div
                             key={comp.id}
-                            onClick={() => setIsCompetitionModalOpen(true)}
+                            onClick={() => openClubManager('competitions')}
                             className={`flex items-center justify-between gap-1.5 px-2 py-1.5 rounded-lg border text-[10px] cursor-pointer transition-all ${
                               isNearest
                                 ? 'bg-amber-50/95 border-amber-400 shadow-sm'
@@ -3746,7 +4992,6 @@ export default function App() {
                             className="w-16 sm:w-20 bg-transparent text-slate-800 outline-none font-black text-lg text-right tracking-tight"
                           />
                           <span className="font-bold text-slate-500 text-[10px] ml-0.5">m</span>
-                          <Edit2 className="w-2.5 h-2.5 ml-1 text-slate-400 shrink-0" />
                         </div>
                       </div>
                     </div>
@@ -3832,7 +5077,6 @@ export default function App() {
                         />
                       </div>
                       <div className="flex items-center gap-1 glass-input bg-white/60 hover:bg-white/80 rounded-md px-2 py-0.5 border border-slate-300/50 focus-within:border-slate-400">
-                        <Clock className="w-3 h-3 text-slate-500 shrink-0" />
                         <input 
                           type="time"
                           value={startTime}
@@ -3864,6 +5108,16 @@ export default function App() {
               </div>
             </div>
 
+            {(() => {
+              const lockedCount = scheduledWorkoutData.parts.reduce((n, p) => n + p.sets.filter(st => st.locked).length, 0);
+              return lockedCount > 0 ? (
+                <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-amber-50/90 border border-amber-200 text-[10px] font-black text-amber-700">
+                  <span className="flex items-center gap-1"><Lock className="w-3 h-3" /> {lockedCount}項目をロック中（再生成しても変わりません）</span>
+                  <button onClick={unlockAllSets} className="shrink-0 px-2 py-0.5 rounded-md bg-white border border-amber-300 text-amber-700 hover:bg-amber-100">すべて解除</button>
+                </div>
+              ) : null;
+            })()}
+
             <div className="space-y-2">
               {scheduledWorkoutData.parts.map((part, index) => (
                 <div key={part.id} className="glass-panel rounded-2xl overflow-hidden border border-slate-300/60 shadow-sm">
@@ -3877,7 +5131,6 @@ export default function App() {
                           onChange={(e) => updatePartName(part.id, e.target.value)}
                           className="font-black text-slate-800 text-sm bg-transparent outline-none w-20 sm:w-24"
                         />
-                        <Edit2 className="w-2.5 h-2.5 text-slate-400 shrink-0 ml-0.5" />
                       </div>
                       
                       <div className="flex items-center glass-input bg-white/80 border border-slate-300/70 hover:border-blue-300 rounded-md px-2 py-0.5 transition-all shadow-sm shrink-0">
@@ -3892,11 +5145,25 @@ export default function App() {
                           step="25"
                           className="w-12 sm:w-14 bg-transparent text-slate-800 font-black text-xs sm:text-sm text-right outline-none"
                         />
-                        <span className="text-[10px] font-bold text-slate-500 ml-0.5 mr-1">m</span>
-                        <Edit2 className="w-2.5 h-2.5 text-slate-400 shrink-0" />
+                        <span className="text-[10px] font-bold text-slate-500 ml-0.5">m</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-0.5 shrink-0">
+                      {(() => {
+                        const allLocked = part.sets.length > 0 && part.sets.every(st => st.locked);
+                        const someLocked = part.sets.some(st => st.locked);
+                        return (
+                          <button
+                            onClick={() => togglePartLock(part.id)}
+                            disabled={part.sets.length === 0}
+                            className={`glass-btn flex items-center justify-center p-1.5 rounded-lg ${allLocked ? 'bg-amber-100 text-amber-600 border-amber-300' : someLocked ? 'text-amber-500 border-amber-200' : 'text-slate-400 border-slate-300/50'}`}
+                            title={allLocked ? 'パートのロックを解除' : 'パートの項目をすべてロック'}
+                            aria-pressed={allLocked}
+                          >
+                            {allLocked ? <Lock className="w-3.5 h-3.5" strokeWidth={2.75} /> : <Unlock className="w-3.5 h-3.5" />}
+                          </button>
+                        );
+                      })()}
                       <button 
                         onClick={() => openPartEditModal(part)}
                         className="glass-btn text-slate-500 hover:text-slate-800 flex items-center justify-center p-1.5 rounded-lg border-slate-300/50"
@@ -3921,11 +5188,16 @@ export default function App() {
                   </div>
                   
                   <div className="p-1 space-y-0.5">
-                    {part.sets.map((set) => (
-                      <div 
-                        key={set.id} 
-                        className="flex items-stretch p-1.5 rounded-xl transition-all border border-transparent hover:bg-white/60 hover:border-slate-300/50 border-b border-slate-300/50 last:border-0"
+                    {part.sets.map((set, setIdx) => {
+                      const patternKey = patternKeyFor(part.type || part.name, purpose);
+                      const patterns = getSetPatterns(logicSettings, patternKey);
+                      const pickerOpen = patternPickerFor === set.id;
+                      return (
+                      <div
+                        key={set.id}
+                        className={`rounded-xl transition-all border ${set.locked ? 'bg-amber-50/80 border-amber-200' : 'border-transparent hover:bg-white/60 hover:border-slate-300/50'} border-b border-slate-300/50 last:border-0`}
                       >
+                      <div className="flex items-stretch p-1.5">
                         <div className="flex flex-col items-center justify-center w-11 sm:w-12 shrink-0 border-r border-slate-300/60 mr-2 pr-1.5">
                           <div className="text-[10px] font-bold text-slate-500 whitespace-nowrap leading-none">{formatTimeObj(set.setStart)}</div>
                           <div className="h-2 w-px bg-slate-300/60 my-0.5"></div>
@@ -3933,73 +5205,133 @@ export default function App() {
                         </div>
 
                         <div className="flex-1 flex flex-col justify-center px-0.5 py-0.5 min-w-0">
-                          <div className="flex items-center flex-nowrap gap-x-1 overflow-x-auto hide-scrollbar">
+                          {/* 距離 × 本数 × セット数 ・ 種目（タップでそのまま編集） */}
+                          <div className="flex items-center flex-nowrap gap-x-1">
                             <div className="flex items-baseline whitespace-nowrap">
-                              <span className="font-black text-base text-slate-800">{set.distance}</span>
+                              <InlineNumber label="距離" value={set.distance} onCommit={(v) => updateSetFields(part.id, set.id, { distance: v })} className="font-black text-base text-slate-800" />
                               <span className="text-[10px] font-bold text-slate-400 mx-0.5">×</span>
-                              <span className="font-black text-base text-slate-800">{set.reps}</span>
-                              
+                              <InlineNumber label="本数" value={set.reps} onCommit={(v) => updateSetFields(part.id, set.id, { reps: v })} className="font-black text-base text-slate-800" />
                               {set.setsCount > 1 && (
                                 <>
                                   <span className="text-[10px] font-bold text-slate-400 mx-0.5">×</span>
-                                  <span className="font-black text-base text-slate-800">{set.setsCount}</span>
+                                  <InlineNumber label="セット数" value={set.setsCount} onCommit={(v) => updateSetFields(part.id, set.id, { setsCount: v })} className="font-black text-base text-slate-800" />
                                   <span className="text-[8px] font-bold text-slate-500 ml-0.5">set</span>
                                 </>
                               )}
                             </div>
-                            <span className={`text-[9px] font-black px-1 py-0.5 rounded shrink-0 border bg-white/80 shadow-sm ${levelCategory === 'enjoy' ? 'text-blue-600 border-blue-200' : 'text-rose-600 border-rose-200'}`}>
-                              {set.style}
-                            </span>
+                            <select
+                              aria-label="種目"
+                              value={set.style}
+                              onChange={(e) => updateSetFields(part.id, set.id, { style: e.target.value })}
+                              className={`text-[9px] font-black px-1 py-0.5 rounded shrink-0 border bg-white/80 shadow-sm outline-none cursor-pointer appearance-none text-center ${levelCategory === 'enjoy' ? 'text-blue-600 border-blue-200' : 'text-rose-600 border-rose-200'}`}
+                            >
+                              {(STYLES.includes(set.style) ? STYLES : [set.style, ...STYLES]).map(st => <option key={st} value={st}>{st}</option>)}
+                            </select>
                           </div>
 
-                          {(set.description || (set.setsCount > 1 && set.restSeconds > 0)) && (
-                            <div className="flex flex-col mt-0.5">
-                              {set.setsCount > 1 && set.restSeconds > 0 && (
-                                <div className="text-[9px] font-black text-orange-500 flex items-center gap-0.5">
-                                  <Timer className="w-2.5 h-2.5" /> Set Rest {formatTime(set.restSeconds)}
-                                </div>
-                              )}
-                              {set.description && (
-                                <div className="text-[10px] font-bold text-slate-500 line-clamp-1 whitespace-pre-wrap leading-tight mt-[1px]">
-                                  {set.description}
-                                </div>
-                              )}
+                          {set.setsCount > 1 && set.restSeconds > 0 && (
+                            <div className="text-[9px] font-black text-orange-500 flex items-center gap-0.5 mt-0.5">
+                              <Timer className="w-2.5 h-2.5" /> Set Rest
+                              <InlineTime label="セット間レスト" seconds={set.restSeconds} onCommit={(v) => updateSetFields(part.id, set.id, { restSeconds: v })} className="text-orange-500 font-black text-[9px]" />
                             </div>
                           )}
+                          {/* 詳細：手入力 または 登録パターンから選択 */}
+                          <div className="flex items-center gap-0.5 mt-0.5 min-w-0">
+                            <input
+                              type="text"
+                              aria-label="詳細"
+                              value={set.description || ''}
+                              onChange={(e) => updateSetDescriptionDirect(part.id, set.id, e.target.value)}
+                              placeholder="詳細を入力"
+                              className="flex-1 min-w-0 text-[10px] font-bold text-slate-500 bg-transparent outline-none rounded px-0.5 hover:bg-white/80 focus:bg-white focus:ring-2 focus:ring-blue-300 focus:text-slate-800 placeholder-slate-300"
+                            />
+                            <button
+                              onClick={() => setPatternPickerFor(pickerOpen ? null : set.id)}
+                              className={`shrink-0 flex items-center gap-0.5 text-[9px] font-black px-1.5 py-0.5 rounded-md border transition-colors ${pickerOpen ? 'bg-blue-500 text-white border-blue-400' : 'bg-white/70 text-blue-600 border-blue-200 hover:bg-white'}`}
+                              title="登録パターンから選ぶ"
+                            >
+                              <List className="w-2.5 h-2.5" /> 候補
+                            </button>
+                          </div>
                         </div>
-                        
-                        <div className="flex items-center gap-1 pl-2 border-l border-slate-300/60 shrink-0">
-                          {set.circleSeconds > 0 ? (
-                            <div className="w-[76px] md:w-[84px] text-right shrink-0 flex flex-col items-end justify-start pt-0.5 gap-0.5 pl-1">
-                              <div className="font-black text-[12px] text-slate-800 flex items-center justify-between w-full">
-                                <div className={`flex items-center gap-[2px] ${!set.circle ? 'invisible' : ''}`}>
-                                  <Timer className={`w-3.5 h-3.5 text-slate-400 shrink-0`} strokeWidth={3} />
-                                  <span className={`text-[8px] text-slate-400 font-black shrink-0 mt-[1px]`}>ｻｰｸﾙ</span>
-                                </div>
-                                <span className="shrink-0 text-right font-mono tracking-tighter ml-1">{set.circle || '-'}</span>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="min-w-[4rem]"></div>
-                          )}
-                          
-                          <div className="flex flex-col gap-1 ml-0.5">
-                            <button 
+
+                        <div className="flex flex-col items-end justify-between gap-1 pl-2 border-l border-slate-300/60 shrink-0 w-[84px]">
+                          <div className="flex items-center gap-[2px] font-black text-[12px] text-slate-800 pt-0.5">
+                            <Timer className="w-3.5 h-3.5 text-slate-400 shrink-0" strokeWidth={3} />
+                            <span className="text-[8px] text-slate-400 font-black shrink-0 mt-[1px]">ｻｰｸﾙ</span>
+                            <InlineTime label="サークル" seconds={set.circleSeconds} onCommit={(v) => updateSetFields(part.id, set.id, { circleSeconds: v })} className="font-mono tracking-tighter text-[12px] text-slate-800 font-black" />
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleSetLock(part.id, set.id); }}
+                              className={`glass-btn flex items-center justify-center w-6 h-6 rounded-md ${set.locked ? 'bg-amber-100 text-amber-600 border-amber-300' : 'text-slate-400 border-slate-300/50'}`}
+                              title={set.locked ? 'ロック中（再生成しても変わりません）' : 'ロックする（再生成しても変えない）'}
+                              aria-pressed={Boolean(set.locked)}
+                            >
+                              {set.locked ? <Lock className="w-3 h-3" strokeWidth={2.75} /> : <Unlock className="w-3 h-3" />}
+                            </button>
+                            <button
                               onClick={(e) => { e.stopPropagation(); openEditModal(part.id, set); }}
                               className="glass-btn flex items-center justify-center w-6 h-6 text-slate-500 rounded-md border-slate-300/50"
+                              title="この項目をまとめて編集"
                             >
-                              <Edit2 className="w-3 h-3" />
+                              <Settings className="w-3 h-3" />
                             </button>
-                            <button 
+                            <button
                               onClick={(e) => { e.stopPropagation(); deleteSetDirect(part.id, set.id); }}
                               className="glass-btn flex items-center justify-center w-6 h-6 text-slate-500 hover:text-red-500 rounded-md border-slate-300/50"
+                              title="この項目を削除"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
                           </div>
                         </div>
                       </div>
-                    ))}
+
+                      {/* 登録パターンの候補一覧 */}
+                      {pickerOpen && (
+                        <div className="mx-1.5 mb-1.5 p-1.5 rounded-lg bg-white/90 border border-blue-200 shadow-sm space-y-1 animate-in fade-in duration-150">
+                          <div className="flex items-center justify-between px-0.5">
+                            <span className="text-[9px] font-black text-slate-500">登録パターン（{PATTERN_GROUPS.find(g => g.key === patternKey)?.label || patternKey}）</span>
+                            <button
+                              onClick={() => { setPatternPickerFor(null); setTempSettings(JSON.parse(JSON.stringify(logicSettings))); setPatternGroup(patternKey); setActiveLogicTab('patterns'); setIsLogicSettingsOpen(true); }}
+                              className="text-[9px] font-bold text-blue-600 underline"
+                            >
+                              パターンを編集
+                            </button>
+                          </div>
+                          {patterns.map((pt, i) => (
+                            <button
+                              key={i}
+                              onClick={() => { updateSetFields(part.id, set.id, { style: STYLES.includes(pt.style) ? pt.style : set.style, description: pt.description || '' }); setPatternPickerFor(null); }}
+                              className={`w-full flex items-center gap-1.5 text-left px-1.5 py-1 rounded-md border transition-colors ${set.description === pt.description && set.style === pt.style ? 'bg-blue-50 border-blue-300' : 'bg-white border-slate-200 hover:bg-blue-50'}`}
+                            >
+                              <span className="text-[9px] font-black text-blue-600 border border-blue-200 rounded px-1 shrink-0 bg-white">{pt.style}</span>
+                              <span className="text-[10px] font-bold text-slate-700 truncate">{pt.description}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* 項目間Rest（次の項目までの休憩）：タップでそのまま入力 */}
+                      {setIdx < part.sets.length - 1 && (
+                        <label className={`flex items-center gap-1 mx-2 mb-1 px-2 py-0.5 rounded-md text-[9px] font-black cursor-text transition-colors ${Number(set.itemRestSeconds) > 0 ? 'bg-orange-50/80 text-orange-600 border border-orange-200/70' : 'text-slate-400 border border-dashed border-slate-300/80 hover:bg-white/70'}`}>
+                          <Timer className="w-2.5 h-2.5 shrink-0" />
+                          <span className="shrink-0">項目間 Rest</span>
+                          <InlineTime
+                            label="項目間レスト"
+                            seconds={Number(set.itemRestSeconds) || 0}
+                            onCommit={(v) => updateSetFields(part.id, set.id, { itemRestSeconds: v })}
+                            className={`font-black text-[10px] !text-left ${Number(set.itemRestSeconds) > 0 ? 'text-orange-600' : 'text-slate-400'}`}
+                          />
+                          {Number(set.itemRestSeconds) > 0 && (
+                            <span className="ml-auto font-mono text-[9px] text-orange-500">{formatTimeObj(set.itemRestStart)} ~ {formatTimeObj(set.itemRestEnd)}</span>
+                          )}
+                        </label>
+                      )}
+                      </div>
+                      );
+                    })}
                     {part.sets.length === 0 && (
                       <div className="text-center p-4 text-xs font-bold text-slate-400 bg-white/40 rounded-xl m-1 border border-dashed border-slate-300/80">
                         メニューがありません
@@ -4009,39 +5341,19 @@ export default function App() {
 
                   {part.sets.length > 0 && (Number(part.partRestSeconds) > 0 || index < scheduledWorkoutData.parts.length - 1) && (
                     <div className="flex items-center justify-between p-1.5 px-2.5 bg-orange-50/70 backdrop-blur-sm border-t border-slate-300/60 text-[10px] text-orange-600 font-black">
-                      <div className="flex items-center gap-1">
+                      {/* タップでそのまま入力（1:00 / 90 / 1'30 などの書き方に対応） */}
+                      <label className="flex items-center gap-1 cursor-text">
                         <Timer className="w-3 h-3" />
                         <span>Part Rest</span>
-                        <div className="flex items-center gap-0.5 glass-input bg-white/80 border border-orange-200 hover:border-orange-300 focus-within:border-orange-400 rounded px-1.5 py-0.5 ml-1 shadow-sm transition-all">
-                          <input
-                            type="number"
-                            value={Math.floor((Number(part.partRestSeconds) || 0) / 60).toString()}
-                            onFocus={(e) => e.target.select()}
-                            onChange={(e) => {
-                              let val = parseInt(e.target.value) || 0;
-                              updatePartRestDirect(part.id, val * 60 + ((Number(part.partRestSeconds) || 0) % 60));
-                            }}
-                            min="0"
-                            className="w-6 text-right bg-transparent text-orange-600 font-black outline-none text-[10px]"
+                        <span className="flex items-center glass-input bg-white/80 border border-orange-200 hover:border-orange-300 focus-within:border-orange-400 focus-within:ring-2 focus-within:ring-orange-200 rounded px-1.5 py-0.5 ml-1 shadow-sm transition-all">
+                          <InlineTime
+                            label="パート間レスト"
+                            seconds={Number(part.partRestSeconds) || 0}
+                            onCommit={(v) => updatePartRestDirect(part.id, v)}
+                            className="text-orange-600 font-black text-[11px] !text-center focus:!ring-0 focus:!bg-transparent hover:!bg-transparent"
                           />
-                          <span className="text-orange-600 font-black text-[9px] mx-0.5">分</span>
-                          <input
-                            type="number"
-                            value={((Number(part.partRestSeconds) || 0) % 60).toString()}
-                            onFocus={(e) => e.target.select()}
-                            onChange={(e) => {
-                              let val = parseInt(e.target.value) || 0;
-                              if (val > 59) val = 59;
-                              if (val < 0) val = 0;
-                              updatePartRestDirect(part.id, Math.floor((Number(part.partRestSeconds) || 0) / 60) * 60 + val);
-                            }}
-                            min="0" max="59"
-                            className="w-7 text-right bg-transparent text-orange-600 font-black outline-none text-[10px]"
-                          />
-                          <span className="text-orange-600 font-black text-[9px] ml-0.5 mr-0.5">秒</span>
-                          <Edit2 className="w-2.5 h-2.5 text-orange-400 shrink-0" />
-                        </div>
-                      </div>
+                        </span>
+                      </label>
                       {Number(part.partRestSeconds) > 0 && (
                         <div className="text-[9px] text-orange-500 font-mono font-black bg-white/90 px-1.5 py-0.5 rounded shadow-sm border border-orange-100">
                           {formatTimeObj(part.partRestStart)} ~ {formatTimeObj(part.partRestEnd)}
@@ -4070,7 +5382,7 @@ export default function App() {
             <div 
               ref={printCardRef}
               style={isScreenshotMode ? { transform: `scale(${screenshotScale})`, transformOrigin: 'center center' } : undefined}
-              className={`${isCurrentAiGenerated ? 'magic-border-print-ai shadow-[0_0_15px_rgba(217,70,239,0.25)]' : levelCategory === 'enjoy' ? 'magic-border-print-enjoy shadow-[0_0_15px_rgba(59,130,246,0.2)]' : 'magic-border-print-special shadow-[0_0_15px_rgba(225,29,72,0.2)]'} ${isScreenshotMode ? 'w-[380px] pointer-events-none' : 'w-full max-w-[420px]'} shrink-0 transition-transform duration-200`}
+              className={`${isCurrentAiGenerated ? 'magic-border-print-ai shadow-[0_0_15px_rgba(217,70,239,0.25)]' : levelCategory === 'enjoy' ? 'magic-border-print-enjoy shadow-[0_0_15px_rgba(59,130,246,0.2)]' : 'magic-border-print-special shadow-[0_0_15px_rgba(225,29,72,0.2)]'} ${isScreenshotMode ? 'w-[380px] pointer-events-none' : 'w-full max-w-[420px]'} shrink-0 transition-transform duration-200 print-card`}
             >
               <div className={`magic-border-print-content w-full overflow-hidden print-area text-black flex flex-col ${PRINT_FONTS.find(f => f.id === printFont)?.className}`} style={{ WebkitFontSmoothing: 'antialiased' }}>
                 
@@ -4094,7 +5406,6 @@ export default function App() {
                       </div>
                       <div className="relative flex items-center bg-transparent hover:bg-slate-200 focus-within:bg-slate-200 rounded px-1 transition-colors shrink-0">
                         <input type="text" value={printTime} onChange={(e) => setPrintTime(e.target.value)} className="bg-transparent text-center outline-none w-[80px] font-extrabold tracking-tight text-[9px]"/>
-                        <Edit2 className="w-2.5 h-2.5 text-slate-500 shrink-0 ml-0.5" />
                       </div>
                     </div>
                   </div>
@@ -4179,19 +5490,20 @@ export default function App() {
                 </div>
 
                 {/* Menu List */}
-                <div className="p-1 space-y-1 bg-white">
+                <div className="mm-print-list p-1 space-y-1 bg-white">
                   {scheduledWorkoutData.parts.map((part) => {
                     const colors = getPartColors(part.name);
                     return (
-                      <div key={part.id} className={`rounded-sm border border-slate-100 overflow-hidden ${colors.setBg}`}>
-                        <div className={`flex justify-between items-center border-l-[3px] ${colors.border} ${colors.headerBg} px-1.5 py-[3px]`}>
+                      <div key={part.id} style={{ '--mm-rows': part.sets.length + 1 }} className={`mm-print-part rounded-sm border border-slate-100 overflow-hidden ${colors.setBg}`}>
+                        <div className={`mm-print-row flex justify-between items-center border-l-[3px] ${colors.border} ${colors.headerBg} px-1.5 py-[3px]`}>
                           <span className={`font-extrabold text-[11px] ${colors.text} leading-none py-0.5`}>{part.name}</span>
                           <span className={`font-extrabold text-[10px] ${colors.text} leading-none py-0.5`}>{part.total}m</span>
                         </div>
                         
-                        <div className="px-1 py-0.5">
+                        <div className="mm-print-sets px-1 py-0.5">
                           {part.sets.map((set, setIndex) => (
-                            <div key={set.id} className={`flex items-start gap-1 text-[10px] leading-tight py-[2px] ${setIndex > 0 ? 'border-t border-dashed border-slate-200/80' : ''}`}>
+                            <React.Fragment key={set.id}>
+                            <div className={`mm-print-row flex items-start gap-1 text-[10px] leading-tight py-[2px] ${setIndex > 0 ? 'border-t border-dashed border-slate-200/80' : ''}`}>
                               <div className="w-[36px] text-right text-[9px] font-extrabold text-slate-500 pt-[1px] shrink-0 tracking-tighter whitespace-nowrap">
                                 {formatTimeObj(set.setStart)}
                               </div>
@@ -4245,6 +5557,12 @@ export default function App() {
                                 )}
                               </div>
                             </div>
+                            {setIndex < part.sets.length - 1 && Number(set.itemRestSeconds) > 0 && (
+                              <div className="text-right text-[8.5px] text-orange-600 font-extrabold pr-1 leading-none pb-[2px]">
+                                [ {TRANSLATIONS[printLang].rest} {formatTime(set.itemRestSeconds)} ]
+                              </div>
+                            )}
+                            </React.Fragment>
                           ))}
                           {part.partRestSeconds > 0 && part.sets.length > 0 && (
                             <div className="text-right text-[9px] text-orange-600 font-extrabold mt-0.5 pr-1 pb-0.5">
@@ -4407,7 +5725,7 @@ export default function App() {
                   <span>クラブ別メニュー一覧</span>
                 </div>
                 <button
-                  onClick={() => setIsClubModalOpen(true)}
+                  onClick={() => openClubManager()}
                   className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black shadow-sm transition-all active:scale-95"
                 >
                   <Plus className="w-3 h-3" strokeWidth={2.5} />
@@ -5025,8 +6343,10 @@ export default function App() {
       {isScreenshotMode && (
         <div 
           onClick={(e) => e.stopPropagation()}
-          className={`fixed top-4 left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2 transition-all duration-500 print:hidden ${
-            showScreenshotHint ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'
+          // スマホでは画面上端が時刻の帯・ダイナミックアイランドと重なって押せないため、親指の届く下側に配置（ホームバー分の余白も確保）
+          style={{ bottom: 'calc(env(safe-area-inset-bottom) + 24px)' }}
+          className={`fixed left-1/2 -translate-x-1/2 z-[200] flex items-center gap-2 whitespace-nowrap transition-all duration-500 print:hidden ${
+            showScreenshotHint ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2 pointer-events-none'
           }`}
         >
           <button
@@ -5035,7 +6355,7 @@ export default function App() {
               setIsScreenLocked(nextLock);
               triggerHintTemporarily(2500);
             }}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-xs font-black shadow-xl backdrop-blur-md border transition-all active:scale-95 ${
+            className={`flex items-center gap-1.5 px-5 py-3 rounded-full text-sm font-black shadow-xl backdrop-blur-md border transition-all active:scale-95 ${
               isScreenLocked
                 ? 'bg-amber-500/95 text-white border-amber-300'
                 : 'bg-slate-800/85 text-white border-slate-600 hover:bg-slate-700'
@@ -5057,7 +6377,7 @@ export default function App() {
           {!isScreenLocked && (
             <button
               onClick={() => setIsScreenshotMode(false)}
-              className="flex items-center gap-1 bg-white/90 text-slate-800 border border-slate-300 px-3.5 py-2 rounded-full text-xs font-black shadow-xl backdrop-blur-md active:scale-95 hover:bg-white"
+              className="flex items-center gap-1 bg-white/90 text-slate-800 border border-slate-300 px-4 py-3 rounded-full text-sm font-black shadow-xl backdrop-blur-md active:scale-95 hover:bg-white"
             >
               <X className="w-3.5 h-3.5 text-slate-500" />
               <span>戻る</span>
@@ -5072,7 +6392,7 @@ export default function App() {
           <div className="glass-panel rounded-[2rem] w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 bg-white/90 border-slate-300/60">
             <div className="bg-white/60 px-5 py-3 border-b border-slate-300/60 flex justify-between items-center backdrop-blur-md">
               <h3 className="font-black text-slate-800 text-base">パート設定</h3>
-              <button onClick={() => setEditingPart(null)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50">
+              <button title="閉じる" onClick={() => setEditingPart(null)} className="glass-btn p-1.5 rounded-full text-slate-500 border-slate-300/50">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -5093,7 +6413,7 @@ export default function App() {
                   <Timer className="w-3 h-3" /> パート終了後の休憩 (Rest)
                 </label>
                 <div className="flex items-center justify-between glass-input bg-orange-50/70 rounded-2xl p-2 border-orange-200/50">
-                  <button 
+                  <button title="減らす" 
                     onClick={() => adjustPartRest(-30)}
                     className="glass-btn w-10 h-10 flex items-center justify-center bg-white/80 rounded-xl text-orange-500 border-slate-300/50"
                   >
@@ -5102,7 +6422,7 @@ export default function App() {
                   <div className="text-xl font-black text-slate-800 font-mono w-16 text-center drop-shadow-sm">
                     {formatTime(editingPart.partRestSeconds)}
                   </div>
-                  <button 
+                  <button title="増やす" 
                     onClick={() => adjustPartRest(30)}
                     className="glass-btn w-10 h-10 flex items-center justify-center bg-white/80 rounded-xl text-orange-500 border-slate-300/50"
                   >
@@ -5136,8 +6456,8 @@ export default function App() {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md flex items-center justify-center z-50 p-2 animate-in fade-in duration-200">
           <div className="glass-panel rounded-[1.5rem] w-full max-w-sm shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh] bg-white/90 border-slate-300/60">
             <div className="bg-white/60 px-4 py-2.5 border-b border-slate-300/60 flex justify-between items-center shrink-0 backdrop-blur-md">
-              <h3 className="font-black text-slate-800 text-sm">メニューの編集</h3>
-              <button onClick={() => setEditingSet(null)} className="glass-btn p-1 rounded-full text-slate-500 border-slate-300/50">
+              <h3 className="font-black text-slate-800 text-sm flex items-center gap-1"><Settings className="w-4 h-4 text-slate-500" /> 項目をまとめて編集</h3>
+              <button title="閉じる" onClick={() => setEditingSet(null)} className="glass-btn p-1 rounded-full text-slate-500 border-slate-300/50">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -5172,21 +6492,41 @@ export default function App() {
                   placeholder="例：イーブンペースを保つ"
                   className="w-full p-2 rounded-xl glass-input text-slate-800 text-xs font-black focus:ring-2 focus:ring-blue-400 outline-none border-slate-300/60"
                 />
+                {(() => {
+                  const part = workoutData?.find(p => p.id === editingSet.partId);
+                  const key = patternKeyFor(part?.type || part?.name || 'Main', purpose);
+                  const list = getSetPatterns(logicSettings, key);
+                  return list.length > 0 && (
+                    <div className="pt-1 space-y-1">
+                      <div className="text-[9px] font-black text-slate-400 pl-1">登録パターンから選ぶ（種目と詳細が入ります）</div>
+                      <div className="flex flex-wrap gap-1">
+                        {list.map((pt, i) => (
+                          <button
+                            key={i}
+                            onClick={() => setEditingSet(prev => ({ ...prev, style: STYLES.includes(pt.style) ? pt.style : prev.style, description: pt.description || '' }))}
+                            className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border text-left ${editingSet.description === pt.description && editingSet.style === pt.style ? 'bg-blue-50 border-blue-300' : 'bg-white/80 border-slate-200 hover:bg-blue-50'}`}
+                          >
+                            <span className="text-[9px] font-black text-blue-600">{pt.style}</span>
+                            <span className="text-[10px] font-bold text-slate-700">{pt.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               <div className="space-y-1">
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider pl-1">距離 (m)</label>
                 <div className="flex items-center justify-between glass-input rounded-xl p-1 border-slate-300/60">
-                  <button 
+                  <button title="減らす" 
                     onClick={() => setEditingSet(prev => ({...prev, distance: Math.max(25, prev.distance - 25)}))}
                     className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-blue-500 border-slate-300/50"
                   >
                     <Minus className="w-4 h-4" />
                   </button>
-                  <div className="text-lg font-black text-slate-800 font-mono w-16 text-center drop-shadow-sm">
-                    {editingSet.distance}
-                  </div>
-                  <button 
+                  <InlineNumber label="距離" value={editingSet.distance} onCommit={(v) => setEditingSet(prev => ({ ...prev, distance: v }))} className="text-lg font-black text-slate-800 font-mono" />
+                  <button title="増やす" 
                     onClick={() => setEditingSet(prev => ({...prev, distance: prev.distance + 25}))}
                     className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-blue-500 border-slate-300/50"
                   >
@@ -5199,16 +6539,14 @@ export default function App() {
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider flex items-center pl-1 h-4">本数</label>
                   <div className="flex items-center justify-between glass-input rounded-xl p-1 border-slate-300/60">
-                    <button 
+                    <button title="減らす" 
                       onClick={() => setEditingSet(prev => ({...prev, reps: Math.max(1, prev.reps - 1)}))}
                       className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-blue-500 border-slate-300/50"
                     >
                       <Minus className="w-4 h-4" />
                     </button>
-                    <div className="text-base font-black text-slate-800 font-mono text-center drop-shadow-sm">
-                      {editingSet.reps}
-                    </div>
-                    <button 
+                    <InlineNumber label="本数" value={editingSet.reps} onCommit={(v) => setEditingSet(prev => ({ ...prev, reps: v }))} className="text-base font-black text-slate-800 font-mono" />
+                    <button title="増やす" 
                       onClick={() => setEditingSet(prev => ({...prev, reps: prev.reps + 1}))}
                       className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-blue-500 border-slate-300/50"
                     >
@@ -5222,16 +6560,14 @@ export default function App() {
                     <Layers className="w-3 h-3" /> セット数
                   </label>
                   <div className="flex items-center justify-between glass-input bg-emerald-50/70 rounded-xl p-1 border-emerald-200/50">
-                    <button 
+                    <button title="減らす" 
                       onClick={() => setEditingSet(prev => ({...prev, setsCount: Math.max(1, prev.setsCount - 1)}))}
                       className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-emerald-500 border-slate-300/50"
                     >
                       <Minus className="w-4 h-4" />
                     </button>
-                    <div className="text-base font-black text-slate-800 font-mono text-center drop-shadow-sm">
-                      {editingSet.setsCount}
-                    </div>
-                    <button 
+                    <InlineNumber label="セット数" value={editingSet.setsCount} onCommit={(v) => setEditingSet(prev => ({ ...prev, setsCount: v }))} className="text-base font-black text-slate-800 font-mono" />
+                    <button title="増やす" 
                       onClick={() => setEditingSet(prev => ({...prev, setsCount: prev.setsCount + 1}))}
                       className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-emerald-500 border-slate-300/50"
                     >
@@ -5246,16 +6582,14 @@ export default function App() {
                   <Timer className="w-3 h-3" /> サークル (1本)
                 </label>
                 <div className="flex items-center justify-between glass-input rounded-xl p-1 border-slate-300/60">
-                  <button 
+                  <button title="減らす" 
                     onClick={() => adjustCircle(-5)}
                     className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-blue-500 border-slate-300/50"
                   >
                     <Minus className="w-4 h-4" />
                   </button>
-                  <div className="text-lg font-black text-slate-800 font-mono w-16 text-center drop-shadow-sm">
-                    {formatTime(editingSet.circleSeconds)}
-                  </div>
-                  <button 
+                  <InlineTime label="サークル" seconds={editingSet.circleSeconds} onCommit={(v) => setEditingSet(prev => ({ ...prev, circleSeconds: v }))} className="text-lg font-black text-slate-800 font-mono !text-center" />
+                  <button title="増やす" 
                     onClick={() => adjustCircle(5)}
                     className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-blue-500 border-slate-300/50"
                   >
@@ -5269,16 +6603,14 @@ export default function App() {
                   <Timer className="w-3 h-3" /> セット間 Rest
                 </label>
                 <div className="flex items-center justify-between glass-input bg-orange-50/70 rounded-xl p-1 border-orange-200/50">
-                  <button 
+                  <button title="減らす" 
                     onClick={() => adjustRest(-10)}
                     className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-orange-500 border-slate-300/50"
                   >
                     <Minus className="w-4 h-4" />
                   </button>
-                  <div className="text-lg font-black text-slate-800 font-mono w-16 text-center drop-shadow-sm">
-                    {formatTime(editingSet.restSeconds)}
-                  </div>
-                  <button 
+                  <InlineTime label="セット間レスト" seconds={editingSet.restSeconds} onCommit={(v) => setEditingSet(prev => ({ ...prev, restSeconds: v }))} className="text-lg font-black text-slate-800 font-mono !text-center" />
+                  <button title="増やす" 
                     onClick={() => adjustRest(10)}
                     className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-orange-500 border-slate-300/50"
                   >
@@ -5286,6 +6618,46 @@ export default function App() {
                   </button>
                 </div>
               </div>
+            </div>
+
+            {(() => {
+              const part = workoutData?.find(p => p.id === editingSet.partId);
+              const isLast = !part || part.sets[part.sets.length - 1]?.id === editingSet.setId;
+              return (
+                <div className={`px-3 pb-2 space-y-1 transition-opacity ${isLast ? 'opacity-40 pointer-events-none' : ''}`}>
+                  <label className="text-[10px] font-black text-orange-500 uppercase tracking-wider flex items-center gap-0.5 pl-1">
+                    <Timer className="w-3 h-3" /> 項目間 Rest（次の項目まで）{isLast && <span className="normal-case text-slate-400 ml-1">※パート最後の項目はPart Restを使います</span>}
+                  </label>
+                  <div className="flex items-center justify-between glass-input bg-orange-50/70 rounded-xl p-1 border-orange-200/50">
+                    <button title="減らす"
+                      onClick={() => setEditingSet(prev => ({ ...prev, itemRestSeconds: Math.max(0, (prev.itemRestSeconds || 0) === 0 ? 0 : prev.itemRestSeconds - 10) }))}
+                      className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-orange-500 border-slate-300/50"
+                    >
+                      <Minus className="w-4 h-4" />
+                    </button>
+                    <InlineTime label="項目間レスト" seconds={editingSet.itemRestSeconds || 0} onCommit={(v) => setEditingSet(prev => ({ ...prev, itemRestSeconds: v }))} className="text-lg font-black text-slate-800 font-mono !text-center" />
+                    <button title="増やす"
+                      onClick={() => setEditingSet(prev => ({ ...prev, itemRestSeconds: (prev.itemRestSeconds || 0) + 10 }))}
+                      className="glass-btn w-8 h-8 flex items-center justify-center bg-white/80 rounded-lg text-orange-500 border-slate-300/50"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="px-3 pb-2">
+              <button
+                onClick={() => setEditingSet(prev => ({ ...prev, locked: !prev.locked }))}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-black transition-colors ${editingSet.locked ? 'bg-amber-50 border-amber-300 text-amber-700' : 'bg-white/70 border-slate-300/60 text-slate-500'}`}
+                aria-pressed={editingSet.locked}
+              >
+                <span className="flex items-center gap-1.5">{editingSet.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />} 再生成しても変えない（ロック）</span>
+                <span className={`w-9 h-5 rounded-full relative transition-colors ${editingSet.locked ? 'bg-amber-400' : 'bg-slate-300'}`}>
+                  <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${editingSet.locked ? 'left-[18px]' : 'left-0.5'}`}></span>
+                </span>
+              </button>
             </div>
 
             <div className="p-2.5 bg-white/50 border-t border-slate-300/60 flex gap-2 shrink-0 backdrop-blur-md">

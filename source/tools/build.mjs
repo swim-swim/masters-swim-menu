@@ -31,7 +31,8 @@ const css = (await esbuild.transform(rawCss, { loader: 'css', minify: true, targ
 
 // 3) HTML 組み立て
 const template = fs.readFileSync(path.join(root, 'index.template.html'), 'utf8');
-const html = template
+const build = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+const html = template.replaceAll('__BUILD__', build)
   .replace('/*__CSS__*/', () => css)
   .replace('/*__JS__*/', () => jsCode.replace(/<\/script/gi, '<\\/script'));
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
